@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "apptor-claude-plugins",
+  "description": "Claude Code plugins for the apptor ecosystem — apptorID authentication and more",
+  "owner": {
+    "name": "Expeed Software",
+    "email": "support@expeed.com"
+  },
+  "plugins": [
+    {
+      "name": "apptorID",
+      "description": "Integrate apptorID (OAuth2/OIDC) authentication into any application. Explores your codebase, provisions resources via MCP, writes all integration code, and tests it.",
+      "source": "./plugins/apptorID",
+      "category": "development"
+    }
+  ]
+}
