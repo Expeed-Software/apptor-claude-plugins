@@ -193,6 +193,23 @@ The skill detects this from the project structure.
 
 ## Credential & Config Management
 
+### Two Sets of Credentials
+
+apptorID uses TWO different credential types for TWO different purposes:
+
+**1. OAuth Credentials (for login flow):**
+- `client_id` + `client_secret`
+- Used by the backend to exchange auth codes for tokens
+- Used during user login/logout/token refresh
+
+**2. Admin API Credentials (for user management):**
+- `access_key_id` + `access_key_secret`
+- Used by the backend to call apptorID's REST API
+- Used for: create user, list users, disable/enable user, delete user, resend invitation, forgot password, and any admin operation
+- These are the same credentials used by the MCP server
+
+**Both sets go in the backend config file.** If the app only needs login (no user management from the app), only OAuth credentials are needed. If the app manages users, it needs both.
+
 ### Where Credentials Go
 
 ALL apptorID credentials go in the **backend application config file** — the same file where the app stores its other settings. NOT in `.env` files scattered around, NOT in frontend code.
@@ -207,6 +224,9 @@ apptor:
     client-id: d52d1cf4-eddd-42d2-bdb6-24bb1e2e34c9
     client-secret: XqxAnBzUqK2Bm87UC3NHCCKO6a3N5hnm
     redirect-uri: http://localhost:8080/auth/callback
+  admin:
+    access-key-id: f3a4ae8b-bbcf-4f62-a3bf-6bea3101b3e3
+    access-key-secret: YaiH4WwaaSo1c0dVwBaf6qZn2Vhu8lxve
 ```
 
 Node/Express → `config/apptor.json` or `config.ts`:
@@ -216,7 +236,11 @@ Node/Express → `config/apptor.json` or `config.ts`:
     "realmUrl": "acme-x1y2.sandbox.auth.apptor.io",
     "clientId": "d52d1cf4-eddd-42d2-bdb6-24bb1e2e34c9",
     "clientSecret": "XqxAnBzUqK2Bm87UC3NHCCKO6a3N5hnm",
-    "redirectUri": "http://localhost:3000/auth/callback"
+    "redirectUri": "http://localhost:3000/auth/callback",
+    "admin": {
+      "accessKeyId": "f3a4ae8b-bbcf-4f62-a3bf-6bea3101b3e3",
+      "accessKeySecret": "YaiH4WwaaSo1c0dVwBaf6qZn2Vhu8lxve"
+    }
   }
 }
 ```
@@ -226,6 +250,8 @@ Python/FastAPI → `config.py` or `settings.py`:
 APPTOR_REALM_URL = "acme-x1y2.sandbox.auth.apptor.io"
 APPTOR_CLIENT_ID = "d52d1cf4-eddd-42d2-bdb6-24bb1e2e34c9"
 APPTOR_CLIENT_SECRET = "XqxAnBzUqK2Bm87UC3NHCCKO6a3N5hnm"
+APPTOR_ACCESS_KEY_ID = "f3a4ae8b-bbcf-4f62-a3bf-6bea3101b3e3"
+APPTOR_ACCESS_KEY_SECRET = "YaiH4WwaaSo1c0dVwBaf6qZn2Vhu8lxve"
 ```
 
 **Why in the config file:** The developer pushes this into Kubernetes ConfigMaps/Secrets, Docker env, AWS Parameter Store, or whatever deployment mechanism they use. One file with all apptorID settings — easy to find, easy to manage.
@@ -234,19 +260,55 @@ APPTOR_CLIENT_SECRET = "XqxAnBzUqK2Bm87UC3NHCCKO6a3N5hnm"
 
 ### What the Config Should Contain
 
-After setup, the backend config file should have a clear apptorID section with:
+After setup, the backend config file should have a clear apptorID section:
 ```
+# OAuth (for login flow)
 realm-url          ← the realm's auth domain
 client-id          ← OAuth2 client ID  
-client-secret      ← OAuth2 client secret (backend only)
+client-secret      ← OAuth2 client secret
 redirect-uri       ← callback URL
 scopes             ← "openid email profile"
-post-login-path    ← where to redirect after login (e.g., /dashboard)
-post-logout-path   ← where to redirect after logout (e.g., /)
+post-login-path    ← where to redirect after login
+post-logout-path   ← where to redirect after logout
+
+# Admin API (for user management — only if app manages users)
+access-key-id      ← for calling apptorID REST API
+access-key-secret  ← for calling apptorID REST API
 ```
 
 Tell the user after writing the config:
-> "All apptorID credentials are in `{config-file-path}`. For production, move the `client-secret` to your secret management (Kubernetes Secrets, AWS Parameter Store, etc.) and reference it from the config."
+> "All apptorID credentials are in `{config-file-path}`. For production, move secrets (`client-secret`, `access-key-secret`) to your secret management (Kubernetes Secrets, AWS Parameter Store, etc.) and reference them from the config."
+
+### How the Backend Calls apptorID Admin API
+
+When the developer's app needs to manage users (create, list, disable, delete, forgot-password), it calls apptorID's REST API. Authentication uses the `client_credentials` grant with access keys:
+
+```
+POST {realm}/oidc/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials
+&access_key_id={access_key_id}
+&access_key_secret={access_key_secret}
+
+→ Returns: { access_token: "admin-jwt-token" }
+```
+
+Then use that token for admin API calls:
+```
+POST {master-realm}/realms/{realmId}/users
+Authorization: Bearer {admin-jwt-token}
+Content-Type: application/json
+
+{ "email": "user@company.com", "firstName": "John", "orgRefId": "company-123" }
+```
+
+**For Java projects:** The `apptor-authserver-sdk-java` SDK handles this automatically:
+```java
+OidcClient oidcClient = new OidcClient(realmUrl, clientId, clientSecret);
+```
+
+The skill should generate an **apptorID admin client service** in the developer's backend that handles token acquisition, caching, and API calls.
 
 ---
 
@@ -293,6 +355,16 @@ When MCP returns credentials, write them DIRECTLY into the backend config file �
 
 When user wants apptorID-hosted login, register: `https://{authDomain}/hosted-login/`
 This is REQUIRED — apptorID has no automatic fallback. If using `full_setup` with no `loginUrls`, this is done automatically.
+
+**How hosted login works internally (for debugging):**
+1. `/oidc/auth` redirects to `https://{realm}/hosted-login/?request_id={id}`
+2. Hosted login page (React SPA) reads `request_id` from URL
+3. Calls `GET /api/hosted-login/config?requestId={id}` to get: branding, IdP list, feature flags
+4. Renders login form with configured IdPs
+5. On submit: `POST /oidc/login` with username + password + request_id
+6. Response contains `code`, `redirectUri`, `state` → JS redirects to callback
+
+**If hosted login fails:** Check `/api/hosted-login/config?requestId=...` response. If it returns `errorMessage`, that's the issue (expired request_id, invalid app client, etc.).
 
 ### First User
 
@@ -362,6 +434,20 @@ If the stack doesn't match any reference → read `references/oidc-knowledge.md`
 - Register middleware in app startup
 - If replacing existing auth: remove old files, update imports
 
+### Session vs Token Lifetime
+
+The backend session and apptorID tokens have INDEPENDENT lifetimes:
+- **Access token**: 60 min (configurable per app client)
+- **Refresh token**: 30 days (configurable)
+- **Backend session**: depends on framework (Express default: in-memory, Spring: 30 min, etc.)
+
+The backend should:
+- Store tokens in the session after login
+- Before using the access token, check if it's expired
+- If expired, use the refresh token to get a new access token
+- If refresh token is also expired → redirect to login
+- Set the session lifetime to match or exceed the refresh token lifetime
+
 ### Callback Error Handling
 
 The callback route MUST handle errors from apptorID. The callback URL can receive:
@@ -373,11 +459,31 @@ The callback should check for `error` query param FIRST, before trying to exchan
 
 ### Logout Flow
 
-Logout MUST do BOTH:
-1. Clear local session/cookies/tokens in the developer's app
-2. Redirect to apptorID's logout endpoint: `{realm}/oidc/logout?post_logout_redirect_uri={post-logout-url}`
+Logout MUST do ALL THREE:
+1. Revoke the refresh token at apptorID: `POST {realm}/oidc/revoke` with `token={refresh_token}` — prevents the token from being used after logout
+2. Clear local session/cookies/tokens in the developer's app
+3. Redirect to apptorID's logout endpoint: `{realm}/oidc/logout?post_logout_redirect_uri={post-logout-url}`
 
-If only local session is cleared, the user is still logged in at apptorID and will be auto-logged-in on next visit. Both steps are required.
+If only local session is cleared, the user is still logged in at apptorID and refresh token is still valid. All three steps are required.
+
+### apptorID Error Response Format
+
+When apptorID returns an error (400, 401, 403, 500), the response body is:
+```json
+{
+  "timestamp": "2026-04-10T02:28:55.113Z",
+  "errorCode": "ERROR",
+  "message": "Human-readable error description",
+  "path": "/oidc/token"
+}
+```
+
+The developer's backend should parse the `message` field for error display. Common errors:
+- `"Error during PKCE validation"` — code_verifier doesn't match code_challenge
+- `"invalid_auth_code"` — auth code expired or already used
+- `"invalid_client_id"` — client_id doesn't match the code
+- `"Realm not found"` — Host header doesn't match any realm
+- `"Invalid access key"` — access key credentials wrong or revoked
 
 ### CORS Configuration
 
@@ -458,21 +564,24 @@ If app is runnable: start it, verify:
 - [ ] Nonce included in auth request (replay protection)
 - [ ] JWT validated against JWKS (signature + expiry + issuer)
 - [ ] Client secret not in frontend code
-- [ ] Client secret in backend config file only (never hardcoded in code, never logged)
+- [ ] Client secret and access key secret in backend config file only (never hardcoded in code, never logged)
+- [ ] Access key credentials separate from OAuth credentials in config
 - [ ] Multi-tenant: client_secret encrypted at rest
 - [ ] No open redirect on callback (redirect_uri from config, not from query param)
-- [ ] Callback handles error responses from apptorID (not just success)
-- [ ] Logout clears local session AND redirects to apptorID logout
+- [ ] Callback handles error responses from apptorID (`?error=` param)
+- [ ] Logout revokes refresh token + clears local session + redirects to apptorID logout
 
 ### Completeness Checklist
 
 - [ ] Discovery endpoint cached (not fetched on every request)
-- [ ] Token refresh works (auto-refresh before expiry)
-- [ ] Logout does both: clear local + redirect to apptorID logout
-- [ ] Error handling on all auth endpoints (not just happy path)
+- [ ] Token refresh works (check expiry before use, refresh if expired)
+- [ ] Session lifetime matches or exceeds refresh token lifetime
+- [ ] Logout does all three: revoke refresh token + clear local + redirect to apptorID logout
+- [ ] Error handling on all auth endpoints (parse apptorID error format: `message` field)
 - [ ] If client-hosted: login page renders IdPs dynamically
-- [ ] All apptorID credentials in one config section in backend config file
+- [ ] All apptorID credentials in one section in backend config file (OAuth + admin)
 - [ ] orgRefId/userRefId wired in user creation (if user management built)
+- [ ] Admin API client service built (if user management needed) — uses access key auth
 - [ ] All dependencies added to package manager
 - [ ] All routes wired into router
 - [ ] Middleware registered in app startup
