@@ -121,4 +121,6 @@ Read the admin API section of the relevant stack reference:
 - Read reference files FIRST.
 - Credentials in backend config only.
 - Adapt to any stack.
-- Offer next steps adaptively after completion.
+- After completion, suggest related skills:
+  - "Want to add forgot password?" → `apptorID:forgot-password`
+  - "Need to configure email or manage resources?" → `apptorID:manage`

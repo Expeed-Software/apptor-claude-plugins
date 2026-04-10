@@ -83,4 +83,6 @@ Register via MCP (`apptorID_add_app_urls`):
 - Read reference files FIRST.
 - Credentials in backend config only.
 - Adapt to any stack.
-- Offer next steps adaptively after completion.
+- After completion, suggest related skills:
+  - "Want to manage users from your app?" → `apptorID:user-management`
+  - "Need to configure email templates?" → `apptorID:manage`

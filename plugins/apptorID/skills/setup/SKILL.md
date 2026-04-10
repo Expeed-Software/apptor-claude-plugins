@@ -137,4 +137,7 @@ Rate 1-10. Below 9 → fix and re-review.
 - Adapt to any stack.
 - Don't over-ask. Explore first.
 - MCP when available. List before creating.
-- After setup, offer next steps adaptively — don't stop at login.
+- After setup, offer next steps — suggest specific skills by name:
+  - "Want to add forgot password?" → `apptorID:forgot-password`
+  - "Want to manage users from your app?" → `apptorID:user-management`
+  - "Need to configure email templates or manage apptorID resources?" → `apptorID:manage`
