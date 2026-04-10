@@ -1,0 +1,8 @@
+{
+  "name": "apptorID",
+  "description": "Integrate apptorID (OAuth2/OIDC) authentication into any application. Explores your codebase, provisions apptorID resources via MCP, writes all integration code, and tests it — end to end.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Expeed Software"
+  }
+}
