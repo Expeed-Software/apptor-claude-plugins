@@ -585,3 +585,305 @@ export async function resolveTenant(req: Request, configRepository: any): Promis
 ```
 
 See `references/multitenant-db.md` for the database schema and repository.
+
+---
+
+## Admin API Client
+
+### Configuration (add to .env and config.ts)
+
+```env
+APPTOR_ADMIN_ACCESS_KEY_ID=your-access-key-id
+APPTOR_ADMIN_ACCESS_KEY_SECRET=your-access-key-secret
+```
+
+```typescript
+// config.ts — extend the existing apptorConfig
+export const apptorConfig = {
+  realmUrl: process.env.APPTOR_REALM_URL!,
+  clientId: process.env.APPTOR_CLIENT_ID!,
+  clientSecret: process.env.APPTOR_CLIENT_SECRET!,
+  redirectUri: process.env.APPTOR_REDIRECT_URI!,
+  scopes: process.env.APPTOR_SCOPES || 'openid email profile',
+  postLoginPath: process.env.POST_LOGIN_PATH || '/dashboard',
+  postLogoutPath: process.env.POST_LOGOUT_PATH || '/',
+
+  // Admin API credentials (access key pair, not OAuth client)
+  adminAccessKeyId: process.env.APPTOR_ADMIN_ACCESS_KEY_ID!,
+  adminAccessKeySecret: process.env.APPTOR_ADMIN_ACCESS_KEY_SECRET!,
+
+  get realmBaseUrl(): string {
+    return this.realmUrl.startsWith('http') ? this.realmUrl : `https://${this.realmUrl}`;
+  },
+
+  get discoveryUrl(): string {
+    return `${this.realmBaseUrl}/.well-known/openid-configuration`;
+  },
+};
+```
+
+### ApptorAdminClient (TypeScript)
+
+```typescript
+import axios from 'axios';
+import { apptorConfig } from './config';
+
+interface AdminTokenResponse {
+  access_token: string;
+  expires_in: number;
+  token_type: string;
+}
+
+interface UserCreateRequest {
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  orgRefId: string;
+  [key: string]: any;
+}
+
+/**
+ * Admin API client for apptorID user management.
+ * Uses client_credentials with access_key_id/access_key_secret to obtain
+ * a short-lived admin token, then calls the realm Admin API.
+ *
+ * Token is cached and reused until 60 seconds before expiry.
+ */
+class ApptorAdminClient {
+  private adminToken: string | null = null;
+  private tokenExpiresAt: number = 0;
+
+  /**
+   * Acquire (or return cached) admin token via client_credentials grant.
+   * POST {realmBaseUrl}/oidc/token
+   *   grant_type=client_credentials
+   *   &access_key_id={id}
+   *   &access_key_secret={secret}
+   */
+  private async getAdminToken(): Promise<string> {
+    const now = Date.now();
+    // Return cached token if valid with 60-second buffer
+    if (this.adminToken && now < this.tokenExpiresAt - 60_000) {
+      return this.adminToken;
+    }
+
+    const params = new URLSearchParams({
+      grant_type: 'client_credentials',
+      access_key_id: apptorConfig.adminAccessKeyId,
+      access_key_secret: apptorConfig.adminAccessKeySecret,
+    });
+
+    const response = await axios.post<AdminTokenResponse>(
+      `${apptorConfig.realmBaseUrl}/oidc/token`,
+      params.toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
+
+    this.adminToken = response.data.access_token;
+    this.tokenExpiresAt = now + response.data.expires_in * 1000;
+    return this.adminToken;
+  }
+
+  private async adminRequest<T>(
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+    path: string,
+    body?: any
+  ): Promise<T> {
+    const token = await this.getAdminToken();
+    const url = `${apptorConfig.realmBaseUrl}${path}`;
+    const response = await axios.request<T>({
+      method,
+      url,
+      data: body,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    return response.data;
+  }
+
+  /** Create a user in a realm. orgRefId links the user to an org. */
+  async createUser(realmId: string, user: UserCreateRequest): Promise<any> {
+    return this.adminRequest('POST', `/realms/${realmId}/users`, user);
+  }
+
+  /** List users in a realm. */
+  async listUsers(realmId: string, params?: { page?: number; size?: number; search?: string }): Promise<any> {
+    const query = params ? '?' + new URLSearchParams(params as any).toString() : '';
+    return this.adminRequest('GET', `/realms/${realmId}/users${query}`);
+  }
+
+  /** Get a single user by userId. */
+  async getUser(realmId: string, userId: string): Promise<any> {
+    return this.adminRequest('GET', `/realms/${realmId}/users/${userId}`);
+  }
+
+  /** Update a user's profile fields. */
+  async updateUser(realmId: string, userId: string, updates: Partial<UserCreateRequest>): Promise<any> {
+    return this.adminRequest('PUT', `/realms/${realmId}/users/${userId}`, updates);
+  }
+
+  /** Disable (deactivate) a user account. */
+  async disableUser(realmId: string, userId: string): Promise<any> {
+    return this.adminRequest('PATCH', `/realms/${realmId}/users/${userId}/disable`);
+  }
+
+  /** Enable (reactivate) a user account. */
+  async enableUser(realmId: string, userId: string): Promise<any> {
+    return this.adminRequest('PATCH', `/realms/${realmId}/users/${userId}/enable`);
+  }
+
+  /** Permanently delete a user. */
+  async deleteUser(realmId: string, userId: string): Promise<void> {
+    await this.adminRequest('DELETE', `/realms/${realmId}/users/${userId}`);
+  }
+
+  /** Trigger a forgot-password email for the user. */
+  async forgotPassword(realmId: string, email: string): Promise<any> {
+    return this.adminRequest('POST', `/realms/${realmId}/users/forgot-password`, { email });
+  }
+
+  /** Directly set a user's password (admin override). */
+  async setPassword(realmId: string, userId: string, newPassword: string, temporary = false): Promise<any> {
+    return this.adminRequest('POST', `/realms/${realmId}/users/${userId}/set-password`, {
+      password: newPassword,
+      temporary,
+    });
+  }
+}
+
+export const adminClient = new ApptorAdminClient();
+```
+
+### User Management Express Routes
+
+```typescript
+import { Router, Request, Response } from 'express';
+import { adminClient } from './adminClient';
+import { requireAuth, requireRoles } from './middleware';
+
+const userManagementRouter = Router();
+
+// All routes require authentication; admin routes also require 'admin' role.
+
+/** GET /admin/users — List users in the realm. */
+userManagementRouter.get('/', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+  try {
+    const { realmId } = req.params;
+    const { page, size, search } = req.query as Record<string, string>;
+    const users = await adminClient.listUsers(realmId, { page: Number(page) || 0, size: Number(size) || 20, search });
+    res.json(users);
+  } catch (error: any) {
+    res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
+  }
+});
+
+/** POST /admin/users — Create a new user. orgRefId required in body. */
+userManagementRouter.post('/', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+  try {
+    const { realmId } = req.params;
+    const { email, firstName, lastName, orgRefId, ...rest } = req.body;
+    if (!email || !orgRefId) {
+      return res.status(400).json({ error: 'email and orgRefId are required' });
+    }
+    const user = await adminClient.createUser(realmId, { email, firstName, lastName, orgRefId, ...rest });
+    res.status(201).json(user);
+  } catch (error: any) {
+    res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
+  }
+});
+
+/** GET /admin/users/:userId — Get a single user. */
+userManagementRouter.get('/:userId', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+  try {
+    const { realmId, userId } = req.params;
+    const user = await adminClient.getUser(realmId, userId);
+    res.json(user);
+  } catch (error: any) {
+    res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
+  }
+});
+
+/** PUT /admin/users/:userId — Update a user. */
+userManagementRouter.put('/:userId', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+  try {
+    const { realmId, userId } = req.params;
+    const user = await adminClient.updateUser(realmId, userId, req.body);
+    res.json(user);
+  } catch (error: any) {
+    res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
+  }
+});
+
+/** PATCH /admin/users/:userId/disable — Disable a user. */
+userManagementRouter.patch('/:userId/disable', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+  try {
+    const { realmId, userId } = req.params;
+    await adminClient.disableUser(realmId, userId);
+    res.status(204).send();
+  } catch (error: any) {
+    res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
+  }
+});
+
+/** PATCH /admin/users/:userId/enable — Enable a user. */
+userManagementRouter.patch('/:userId/enable', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+  try {
+    const { realmId, userId } = req.params;
+    await adminClient.enableUser(realmId, userId);
+    res.status(204).send();
+  } catch (error: any) {
+    res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
+  }
+});
+
+/** DELETE /admin/users/:userId — Delete a user. */
+userManagementRouter.delete('/:userId', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+  try {
+    const { realmId, userId } = req.params;
+    await adminClient.deleteUser(realmId, userId);
+    res.status(204).send();
+  } catch (error: any) {
+    res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
+  }
+});
+
+/** POST /admin/users/:userId/set-password — Admin password reset. */
+userManagementRouter.post('/:userId/set-password', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+  try {
+    const { realmId, userId } = req.params;
+    const { password, temporary } = req.body;
+    if (!password) return res.status(400).json({ error: 'password is required' });
+    await adminClient.setPassword(realmId, userId, password, temporary ?? false);
+    res.status(204).send();
+  } catch (error: any) {
+    res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
+  }
+});
+
+// Mount in app.ts:
+// app.use('/admin/realms/:realmId/users', userManagementRouter);
+export { userManagementRouter };
+```
+
+### orgRefId / userRefId Extraction from JWT
+
+The apptorID access token includes `org_id` and `user_ref_id` (userRefId) custom claims.
+Extract them in your middleware after verifying the JWT:
+
+```typescript
+// In requireAuth middleware — after jwt.verify():
+(req as any).user = decoded;
+(req as any).userId = (decoded as any).sub;                  // internal user ID
+(req as any).userRefId = (decoded as any).user_ref_id;       // your app's userRefId
+(req as any).orgRefId = (decoded as any).org_id;             // your app's orgRefId
+(req as any).userRoles = (decoded as any).roles || [];
+
+// In a route handler:
+router.get('/profile', requireAuth, (req: Request, res: Response) => {
+  const { userId, userRefId, orgRefId } = req as any;
+  // Use orgRefId to scope DB queries to the correct tenant/org
+  res.json({ userId, userRefId, orgRefId });
+});
+```
