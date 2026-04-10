@@ -88,17 +88,53 @@ Or:
 >
 > Is this correct?"
 
-**Then ask only these:**
-1. Which identity providers? (local, Google, Microsoft, other)
-2. Client-hosted login page or apptorID-hosted login?
-3. Single-tenant or multi-tenant?
-4. Do you already have an apptorID realm and app client? (yes with credentials / yes but lost secret / no / not sure)
+**Then ask questions interactively using AskUserQuestion.** Present choices as multiple-choice where possible — the user selects with arrow keys. Only use free text when there's no finite set of options.
 
-**If you found existing auth:**
-> "I found existing auth at {file list}. Replace it with apptorID or integrate alongside?"
+**Question 1 — Identity Providers** (multiple choice, multi-select):
+```
+Which identity providers should users be able to log in with?
+  [x] Local (username/password)
+  [ ] Google
+  [ ] Microsoft
+  [ ] Other OIDC provider
+```
+Default: Local selected.
 
-**If multi-tenant:**
-> "Do you have an organizations/tenants table? Name and primary key?"
+**Question 2 — Login Page** (multiple choice, single-select):
+```
+Login page hosting:
+  (•) apptorID-hosted — apptorID provides a branded login page (recommended)
+  ( ) Client-hosted — your app has its own login page
+```
+Default: apptorID-hosted.
+
+**Question 3 — Tenancy Model** (multiple choice, single-select):
+```
+Tenancy model:
+  (•) Single-tenant — one organization, credentials in config (recommended)
+  ( ) Multi-tenant — multiple orgs, each with their own apptorID config in DB
+```
+Default: Single-tenant.
+
+**Question 4 — Existing apptorID resources** (multiple choice, single-select):
+```
+Do you already have an apptorID realm and app client?
+  (•) No — create everything for me
+  ( ) Not sure — let me check what exists
+  ( ) Yes — I have credentials
+  ( ) Yes — but I lost the client secret
+```
+Default: No.
+
+**If user found existing auth** (multiple choice):
+```
+I found existing auth at {file list}:
+  (•) Replace entirely with apptorID
+  ( ) Integrate alongside existing auth
+```
+
+**If multi-tenant** (free text):
+> "Do you have an organizations/tenants table? What's the table name and primary key column?"
 
 **Don't ask** — detect or default:
 - App base URL → from config or `http://localhost:{port}`
@@ -138,6 +174,42 @@ User has nothing?
   → apptorID_full_setup → creates realm + app client + IdPs + URLs + first user.
   → Returns all credentials.
 ```
+
+### First User (Bootstrap)
+
+The first user in a new realm is a chicken-and-egg problem — you can't log in to create a user because there's no user. The MCP tools solve this.
+
+**When using MCP to create the first user:**
+- Show a default password to the user and let them accept or change it:
+  ```
+  First user setup:
+    Email: admin@test.com (for development — doesn't need to be real)
+    Password: Admin@123 (you can change this)
+    
+    Proceed with these defaults? [Y/n]:
+  ```
+- Call `apptorID_create_user` WITH the password — the user is created as ACTIVE, can log in immediately. No email is sent.
+- If using `apptorID_full_setup`, pass `firstUserPassword` — same effect.
+
+### Second User (Email Flow Test)
+
+After the integration is fully wired and working, offer to create a second user to test the email flow:
+
+```
+Would you like to create a test user to verify the email notification flow?
+This requires:
+  1. Email config set up in apptorID (SMTP)
+  2. A real email address that can receive the welcome email
+  
+  (•) Yes — I'll provide a real email
+  ( ) No — skip for now
+```
+
+If yes:
+- Ask for a real email address
+- Call `apptorID_create_user` WITHOUT password — user is created as FORCE_PASSWORD_CHANGE
+- apptorID sends a welcome email with a password setup link
+- Tell the user: "Check your email for the password setup link. Click it, set a password, then try logging in."
 
 **If MCP tools NOT available:**
 
