@@ -792,3 +792,28 @@ public class UserManagementController {
     }
 }
 ```
+
+### orgRefId / userRefId Extraction from JWT
+
+In your JWT validation filter, extract `org_id` and `user_id` from token claims and set them as request attributes:
+
+```java
+// After JWT validation in your filter:
+JWTClaimsSet claims = jwtProcessor.process(token, null);
+
+request.setAttribute("user_id", claims.getSubject());
+request.setAttribute("org_id", claims.getStringClaim("org_id"));       // from orgRefId
+request.setAttribute("user_ref_id", claims.getStringClaim("user_id")); // from userRefId
+request.setAttribute("email", claims.getStringClaim("email"));
+request.setAttribute("roles", claims.getStringListClaim("roles"));
+```
+
+Then in your controller, access them via `@RequestAttribute`:
+
+```java
+@Get
+public HttpResponse<?> listUsers(@RequestAttribute("org_id") String orgId) {
+    // Use orgId to filter users for the current organization
+    return HttpResponse.ok(adminClient.listUsers(realmId));
+}
+```
