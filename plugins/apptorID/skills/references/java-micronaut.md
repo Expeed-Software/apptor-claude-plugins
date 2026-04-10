@@ -465,4 +465,330 @@ public class ApptorSecurityFilter implements HttpServerFilter {
         return Flux.just(HttpResponse.redirect(java.net.URI.create("/auth/login")));
     }
 }
+
+---
+
+## Admin API Client
+
+### application.yml (add admin credentials)
+
+```yaml
+apptor:
+  auth:
+    realm-url: ${APPTOR_REALM_URL}
+    client-id: ${APPTOR_CLIENT_ID}
+    client-secret: ${APPTOR_CLIENT_SECRET}
+    redirect-uri: ${APP_BASE_URL}/auth/callback
+    scopes: openid,email,profile
+    post-login-uri: /dashboard
+    post-logout-uri: /
+  admin:
+    access-key-id: ${APPTOR_ADMIN_ACCESS_KEY_ID}
+    access-key-secret: ${APPTOR_ADMIN_ACCESS_KEY_SECRET}
+```
+
+### Admin Config Properties
+
+```java
+package {{basePackage}}.config;
+
+import io.micronaut.context.annotation.ConfigurationProperties;
+
+@ConfigurationProperties("apptor.admin")
+public class ApptorAdminConfig {
+    private String accessKeyId;
+    private String accessKeySecret;
+
+    public String getAccessKeyId() { return accessKeyId; }
+    public void setAccessKeyId(String accessKeyId) { this.accessKeyId = accessKeyId; }
+    public String getAccessKeySecret() { return accessKeySecret; }
+    public void setAccessKeySecret(String accessKeySecret) { this.accessKeySecret = accessKeySecret; }
+}
+```
+
+### ApptorAdminClient (@Singleton, Java HttpClient)
+
+```java
+package {{basePackage}}.admin;
+
+import {{basePackage}}.config.ApptorAdminConfig;
+import {{basePackage}}.config.ApptorAuthConfig;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.inject.Singleton;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Instant;
+import java.util.Map;
+
+/**
+ * Admin API client for apptorID user management (Micronaut / Java HttpClient).
+ *
+ * Acquires an admin token via client_credentials grant using access_key_id /
+ * access_key_secret, caches it, and refreshes 60 seconds before expiry.
+ *
+ * Token endpoint:
+ *   POST {realmBaseUrl}/oidc/token
+ *   Content-Type: application/x-www-form-urlencoded
+ *   grant_type=client_credentials&access_key_id=...&access_key_secret=...
+ */
+@Singleton
+public class ApptorAdminClient {
+    private static final Logger LOG = LoggerFactory.getLogger(ApptorAdminClient.class);
+
+    private final ApptorAuthConfig authConfig;
+    private final ApptorAdminConfig adminConfig;
+    private final HttpClient httpClient;
+    private final ObjectMapper objectMapper;
+
+    private String cachedToken = null;
+    private Instant tokenExpiresAt = Instant.EPOCH;
+
+    public ApptorAdminClient(ApptorAuthConfig authConfig, ApptorAdminConfig adminConfig) {
+        this.authConfig = authConfig;
+        this.adminConfig = adminConfig;
+        this.httpClient = HttpClient.newHttpClient();
+        this.objectMapper = new ObjectMapper();
+    }
+
+    /**
+     * Returns a valid admin token, acquiring a new one if expired or absent.
+     * Synchronized to prevent concurrent token refreshes under load.
+     */
+    private synchronized String getAdminToken() throws Exception {
+        if (cachedToken != null && Instant.now().isBefore(tokenExpiresAt.minusSeconds(60))) {
+            return cachedToken;
+        }
+
+        String body = "grant_type=client_credentials"
+                + "&access_key_id=" + adminConfig.getAccessKeyId()
+                + "&access_key_secret=" + adminConfig.getAccessKeySecret();
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(authConfig.getRealmBaseUrl() + "/oidc/token"))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new RuntimeException("Failed to acquire admin token, status: " + response.statusCode());
+        }
+
+        JsonNode json = objectMapper.readTree(response.body());
+        cachedToken = json.get("access_token").asText();
+        long expiresIn = json.has("expires_in") ? json.get("expires_in").asLong() : 3600L;
+        tokenExpiresAt = Instant.now().plusSeconds(expiresIn);
+        LOG.debug("Admin token acquired, expires in {}s", expiresIn);
+        return cachedToken;
+    }
+
+    private JsonNode adminGet(String path) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(authConfig.getRealmBaseUrl() + path))
+                .header("Authorization", "Bearer " + getAdminToken())
+                .GET()
+                .build();
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        return objectMapper.readTree(response.body());
+    }
+
+    private JsonNode adminPost(String path, Object body) throws Exception {
+        String json = objectMapper.writeValueAsString(body);
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(authConfig.getRealmBaseUrl() + path))
+                .header("Authorization", "Bearer " + getAdminToken())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json))
+                .build();
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        return objectMapper.readTree(response.body());
+    }
+
+    private JsonNode adminPut(String path, Object body) throws Exception {
+        String json = objectMapper.writeValueAsString(body);
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(authConfig.getRealmBaseUrl() + path))
+                .header("Authorization", "Bearer " + getAdminToken())
+                .header("Content-Type", "application/json")
+                .PUT(HttpRequest.BodyPublishers.ofString(json))
+                .build();
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        return objectMapper.readTree(response.body());
+    }
+
+    private void adminPatch(String path) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(authConfig.getRealmBaseUrl() + path))
+                .header("Authorization", "Bearer " + getAdminToken())
+                .method("PATCH", HttpRequest.BodyPublishers.noBody())
+                .build();
+        httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private void adminDelete(String path) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(authConfig.getRealmBaseUrl() + path))
+                .header("Authorization", "Bearer " + getAdminToken())
+                .DELETE()
+                .build();
+        httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    /** Create a user in a realm. User map must include orgRefId. */
+    public JsonNode createUser(String realmId, Map<String, Object> user) throws Exception {
+        return adminPost("/realms/" + realmId + "/users", user);
+    }
+
+    /** List users in a realm. */
+    public JsonNode listUsers(String realmId, int page, int size, String search) throws Exception {
+        String query = "?page=" + page + "&size=" + size
+                + (search != null && !search.isBlank() ? "&search=" + search : "");
+        return adminGet("/realms/" + realmId + "/users" + query);
+    }
+
+    /** Get a single user by userId. */
+    public JsonNode getUser(String realmId, String userId) throws Exception {
+        return adminGet("/realms/" + realmId + "/users/" + userId);
+    }
+
+    /** Update user profile fields. */
+    public JsonNode updateUser(String realmId, String userId, Map<String, Object> updates) throws Exception {
+        return adminPut("/realms/" + realmId + "/users/" + userId, updates);
+    }
+
+    /** Disable (deactivate) a user account. */
+    public void disableUser(String realmId, String userId) throws Exception {
+        adminPatch("/realms/" + realmId + "/users/" + userId + "/disable");
+    }
+
+    /** Enable (reactivate) a user account. */
+    public void enableUser(String realmId, String userId) throws Exception {
+        adminPatch("/realms/" + realmId + "/users/" + userId + "/enable");
+    }
+
+    /** Permanently delete a user. */
+    public void deleteUser(String realmId, String userId) throws Exception {
+        adminDelete("/realms/" + realmId + "/users/" + userId);
+    }
+
+    /** Trigger forgot-password email for the user. */
+    public JsonNode forgotPassword(String realmId, String email) throws Exception {
+        return adminPost("/realms/" + realmId + "/users/forgot-password", Map.of("email", email));
+    }
+
+    /** Directly set a user's password (admin override). */
+    public JsonNode setPassword(String realmId, String userId, String newPassword, boolean temporary) throws Exception {
+        return adminPost("/realms/" + realmId + "/users/" + userId + "/set-password",
+                Map.of("password", newPassword, "temporary", temporary));
+    }
+}
+```
+
+### UserManagementController (Micronaut @Controller)
+
+```java
+package {{basePackage}}.admin;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import io.micronaut.http.HttpResponse;
+import io.micronaut.http.HttpStatus;
+import io.micronaut.http.annotation.*;
+import io.micronaut.security.annotation.Secured;
+import io.micronaut.security.rules.SecurityRule;
+
+import java.util.Map;
+
+/**
+ * REST endpoints for admin user management.
+ * Mounted at /admin/realms/{realmId}/users.
+ * Secure these routes via Micronaut Security or your JWT filter.
+ */
+@Controller("/admin/realms/{realmId}/users")
+@Secured(SecurityRule.IS_AUTHENTICATED)
+public class UserManagementController {
+
+    private final ApptorAdminClient adminClient;
+
+    public UserManagementController(ApptorAdminClient adminClient) {
+        this.adminClient = adminClient;
+    }
+
+    @Get
+    public HttpResponse<JsonNode> listUsers(
+            @PathVariable String realmId,
+            @QueryValue(defaultValue = "0") int page,
+            @QueryValue(defaultValue = "20") int size,
+            @QueryValue(defaultValue = "") String search) throws Exception {
+        return HttpResponse.ok(adminClient.listUsers(realmId, page, size, search.isBlank() ? null : search));
+    }
+
+    @Post
+    public HttpResponse<JsonNode> createUser(
+            @PathVariable String realmId,
+            @Body Map<String, Object> user) throws Exception {
+        if (!user.containsKey("email") || !user.containsKey("orgRefId")) {
+            return HttpResponse.badRequest();
+        }
+        return HttpResponse.status(HttpStatus.CREATED).body(adminClient.createUser(realmId, user));
+    }
+
+    @Get("/{userId}")
+    public HttpResponse<JsonNode> getUser(
+            @PathVariable String realmId,
+            @PathVariable String userId) throws Exception {
+        return HttpResponse.ok(adminClient.getUser(realmId, userId));
+    }
+
+    @Put("/{userId}")
+    public HttpResponse<JsonNode> updateUser(
+            @PathVariable String realmId,
+            @PathVariable String userId,
+            @Body Map<String, Object> updates) throws Exception {
+        return HttpResponse.ok(adminClient.updateUser(realmId, userId, updates));
+    }
+
+    @Patch("/{userId}/disable")
+    public HttpResponse<Void> disableUser(
+            @PathVariable String realmId,
+            @PathVariable String userId) throws Exception {
+        adminClient.disableUser(realmId, userId);
+        return HttpResponse.noContent();
+    }
+
+    @Patch("/{userId}/enable")
+    public HttpResponse<Void> enableUser(
+            @PathVariable String realmId,
+            @PathVariable String userId) throws Exception {
+        adminClient.enableUser(realmId, userId);
+        return HttpResponse.noContent();
+    }
+
+    @Delete("/{userId}")
+    public HttpResponse<Void> deleteUser(
+            @PathVariable String realmId,
+            @PathVariable String userId) throws Exception {
+        adminClient.deleteUser(realmId, userId);
+        return HttpResponse.noContent();
+    }
+
+    @Post("/{userId}/set-password")
+    public HttpResponse<Void> setPassword(
+            @PathVariable String realmId,
+            @PathVariable String userId,
+            @Body Map<String, Object> body) throws Exception {
+        String password = (String) body.get("password");
+        boolean temporary = Boolean.TRUE.equals(body.get("temporary"));
+        if (password == null || password.isBlank()) {
+            return HttpResponse.badRequest();
+        }
+        adminClient.setPassword(realmId, userId, password, temporary);
+        return HttpResponse.noContent();
+    }
+}
 ```
