@@ -538,3 +538,295 @@ async def resolve_tenant(request: Request, config_repository) -> dict:
 ```
 
 See `references/multitenant-db.md` for the database schema and SQLAlchemy models.
+
+---
+
+## Admin API Client
+
+### Configuration (add to .env and config.py)
+
+```env
+APPTOR_ADMIN_ACCESS_KEY_ID=your-access-key-id
+APPTOR_ADMIN_ACCESS_KEY_SECRET=your-access-key-secret
+```
+
+```python
+# config.py — extend ApptorAuthSettings with admin credentials
+from pydantic_settings import BaseSettings
+
+
+class ApptorSettings(BaseSettings):
+    # OAuth2 / OIDC credentials
+    apptor_realm_url: str
+    apptor_client_id: str
+    apptor_client_secret: str
+    app_base_url: str
+    apptor_redirect_uri: str
+    apptor_scopes: str = "openid email profile"
+    secret_key: str
+    post_login_path: str = "/dashboard"
+    post_logout_path: str = "/"
+
+    # Admin API credentials (access key pair, not OAuth client)
+    apptor_admin_access_key_id: str
+    apptor_admin_access_key_secret: str
+
+    @property
+    def realm_base_url(self) -> str:
+        url = self.apptor_realm_url
+        return url if url.startswith("http") else f"https://{url}"
+
+    @property
+    def discovery_url(self) -> str:
+        return f"{self.realm_base_url}/.well-known/openid-configuration"
+
+    class Config:
+        env_file = ".env"
+
+
+settings = ApptorSettings()
+```
+
+### ApptorAdminClient (async, httpx)
+
+```python
+import time
+from typing import Any
+
+import httpx
+
+from config import settings
+
+
+class ApptorAdminClient:
+    """
+    Admin API client for apptorID user management.
+
+    Acquires an admin token via client_credentials grant using
+    access_key_id / access_key_secret, caches it, and refreshes
+    60 seconds before expiry.
+
+    Token endpoint:
+      POST {realm_base_url}/oidc/token
+      Content-Type: application/x-www-form-urlencoded
+      grant_type=client_credentials&access_key_id=...&access_key_secret=...
+    """
+
+    def __init__(self) -> None:
+        self._admin_token: str | None = None
+        self._token_expires_at: float = 0.0
+
+    async def _get_admin_token(self) -> str:
+        """Return a valid admin token, refreshing if expired or absent."""
+        now = time.monotonic()
+        # Use cached token if valid with 60-second buffer
+        if self._admin_token and now < self._token_expires_at - 60:
+            return self._admin_token
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings.realm_base_url}/oidc/token",
+                data={
+                    "grant_type": "client_credentials",
+                    "access_key_id": settings.apptor_admin_access_key_id,
+                    "access_key_secret": settings.apptor_admin_access_key_secret,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            response.raise_for_status()
+
+        payload = response.json()
+        self._admin_token = payload["access_token"]
+        expires_in = payload.get("expires_in", 3600)
+        self._token_expires_at = now + expires_in
+        return self._admin_token
+
+    async def _admin_request(
+        self,
+        method: str,
+        path: str,
+        body: dict | None = None,
+        params: dict | None = None,
+    ) -> Any:
+        token = await self._get_admin_token()
+        url = f"{settings.realm_base_url}{path}"
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
+                method,
+                url,
+                json=body,
+                params=params,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+            )
+            response.raise_for_status()
+            if response.status_code == 204:
+                return None
+            return response.json()
+
+    async def create_user(self, realm_id: str, user: dict) -> dict:
+        """Create a user in a realm. user dict must include orgRefId."""
+        return await self._admin_request("POST", f"/realms/{realm_id}/users", body=user)
+
+    async def list_users(
+        self,
+        realm_id: str,
+        page: int = 0,
+        size: int = 20,
+        search: str | None = None,
+    ) -> dict:
+        """List users in a realm."""
+        params: dict = {"page": page, "size": size}
+        if search:
+            params["search"] = search
+        return await self._admin_request("GET", f"/realms/{realm_id}/users", params=params)
+
+    async def get_user(self, realm_id: str, user_id: str) -> dict:
+        """Get a single user by user_id."""
+        return await self._admin_request("GET", f"/realms/{realm_id}/users/{user_id}")
+
+    async def update_user(self, realm_id: str, user_id: str, updates: dict) -> dict:
+        """Update user profile fields."""
+        return await self._admin_request("PUT", f"/realms/{realm_id}/users/{user_id}", body=updates)
+
+    async def disable_user(self, realm_id: str, user_id: str) -> None:
+        """Disable (deactivate) a user account."""
+        await self._admin_request("PATCH", f"/realms/{realm_id}/users/{user_id}/disable")
+
+    async def enable_user(self, realm_id: str, user_id: str) -> None:
+        """Enable (reactivate) a user account."""
+        await self._admin_request("PATCH", f"/realms/{realm_id}/users/{user_id}/enable")
+
+    async def delete_user(self, realm_id: str, user_id: str) -> None:
+        """Permanently delete a user."""
+        await self._admin_request("DELETE", f"/realms/{realm_id}/users/{user_id}")
+
+    async def forgot_password(self, realm_id: str, email: str) -> dict:
+        """Trigger a forgot-password email for the user."""
+        return await self._admin_request(
+            "POST", f"/realms/{realm_id}/users/forgot-password", body={"email": email}
+        )
+
+    async def set_password(
+        self, realm_id: str, user_id: str, new_password: str, temporary: bool = False
+    ) -> None:
+        """Directly set a user's password (admin override)."""
+        await self._admin_request(
+            "POST",
+            f"/realms/{realm_id}/users/{user_id}/set-password",
+            body={"password": new_password, "temporary": temporary},
+        )
+
+
+admin_client = ApptorAdminClient()
+```
+
+### User Management FastAPI Routes
+
+```python
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Any
+
+from admin_client import admin_client
+from auth_middleware import require_auth, require_roles
+
+user_mgmt_router = APIRouter(
+    prefix="/admin/realms/{realm_id}/users",
+    tags=["user-management"],
+)
+
+
+@user_mgmt_router.get("", dependencies=[Depends(require_roles("admin"))])
+async def list_users(
+    realm_id: str,
+    page: int = Query(0, ge=0),
+    size: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None),
+) -> Any:
+    """List users in a realm."""
+    return await admin_client.list_users(realm_id, page=page, size=size, search=search)
+
+
+@user_mgmt_router.post("", status_code=201, dependencies=[Depends(require_roles("admin"))])
+async def create_user(realm_id: str, body: dict) -> Any:
+    """Create a new user. body must include 'email' and 'orgRefId'."""
+    if "email" not in body or "orgRefId" not in body:
+        raise HTTPException(status_code=400, detail="email and orgRefId are required")
+    return await admin_client.create_user(realm_id, body)
+
+
+@user_mgmt_router.get("/{user_id}", dependencies=[Depends(require_roles("admin"))])
+async def get_user(realm_id: str, user_id: str) -> Any:
+    """Get a single user."""
+    return await admin_client.get_user(realm_id, user_id)
+
+
+@user_mgmt_router.put("/{user_id}", dependencies=[Depends(require_roles("admin"))])
+async def update_user(realm_id: str, user_id: str, body: dict) -> Any:
+    """Update a user's profile fields."""
+    return await admin_client.update_user(realm_id, user_id, body)
+
+
+@user_mgmt_router.patch("/{user_id}/disable", status_code=204, dependencies=[Depends(require_roles("admin"))])
+async def disable_user(realm_id: str, user_id: str) -> None:
+    """Disable a user account."""
+    await admin_client.disable_user(realm_id, user_id)
+
+
+@user_mgmt_router.patch("/{user_id}/enable", status_code=204, dependencies=[Depends(require_roles("admin"))])
+async def enable_user(realm_id: str, user_id: str) -> None:
+    """Enable a user account."""
+    await admin_client.enable_user(realm_id, user_id)
+
+
+@user_mgmt_router.delete("/{user_id}", status_code=204, dependencies=[Depends(require_roles("admin"))])
+async def delete_user(realm_id: str, user_id: str) -> None:
+    """Permanently delete a user."""
+    await admin_client.delete_user(realm_id, user_id)
+
+
+@user_mgmt_router.post("/{user_id}/set-password", status_code=204, dependencies=[Depends(require_roles("admin"))])
+async def set_password(realm_id: str, user_id: str, body: dict) -> None:
+    """Admin password override for a user."""
+    password = body.get("password")
+    if not password:
+        raise HTTPException(status_code=400, detail="password is required")
+    temporary = bool(body.get("temporary", False))
+    await admin_client.set_password(realm_id, user_id, password, temporary)
+
+# Register in main.py:
+# app.include_router(user_mgmt_router)
+```
+
+### orgRefId / userRefId Extraction from JWT
+
+The apptorID access token includes `org_id` and `user_ref_id` custom claims.
+Extract them in your `require_auth` dependency after validating the JWT:
+
+```python
+# In auth_middleware.py — after jwt.decode():
+async def require_auth(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> dict[str, Any]:
+    """Returns decoded JWT claims including org_id and user_ref_id."""
+    claims = await _validate_token(credentials.credentials)  # or session token
+
+    # Standard OIDC claim
+    claims["user_id"] = claims.get("sub")          # internal user ID
+    # apptorID custom claims
+    claims["user_ref_id"] = claims.get("user_ref_id")  # your app's userRefId
+    claims["org_ref_id"] = claims.get("org_id")        # your app's orgRefId
+    return claims
+
+
+# In a route handler — use the claims:
+@app.get("/profile", dependencies=[Depends(require_auth)])
+async def profile(claims: dict = Depends(require_auth)):
+    user_ref_id = claims.get("user_ref_id")
+    org_ref_id = claims.get("org_ref_id")
+    # Use org_ref_id to scope DB queries to the correct tenant/org
+    return {"userRefId": user_ref_id, "orgRefId": org_ref_id}
+```
