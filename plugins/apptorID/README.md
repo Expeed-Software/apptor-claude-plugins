@@ -2,13 +2,14 @@
 
 Integrate [apptorID](https://apptor.io) (OAuth2/OIDC) authentication into any application using Claude Code.
 
-## What It Does
+## Skills
 
-- **Explores** your codebase — detects backend, frontend, design system, existing auth
-- **Provisions** apptorID resources — creates realms, app clients, IdPs, first user (via MCP)
-- **Writes** all integration code — auth service, login page, callback, JWT middleware, token refresh, tests
-- **Adapts** to your tech stack — Spring, Express, FastAPI, React, Angular, Vue, or anything else
-- **Self-reviews** — checks security, completeness, and code quality before declaring done
+| Skill | Trigger | What It Does |
+|-------|---------|-------------|
+| `apptorID:setup` | "add auth", "login", "SSO" | Full auth integration — explores codebase, provisions via MCP, writes all code, tests |
+| `apptorID:user-management` | "create user", "manage users" | User CRUD endpoints with admin API + orgRefId/userRefId wiring |
+| `apptorID:forgot-password` | "forgot password", "reset password" | Password reset flow + reset page UI |
+| `apptorID:manage` | "configure email", "create realm" | MCP operations for ongoing apptorID management |
 
 ## Install
 
@@ -39,50 +40,29 @@ Default MCP URL is `https://master.sandbox.auth.apptor.io/mcp`.
 
 ## Usage
 
-In your project directory, just tell Claude what you want:
+Just tell Claude what you want:
 
 ```
 > Add apptorID authentication to my app
 
-> Integrate login with Google and Microsoft via apptorID
+> Set up user management with orgRefId mapping
 
-> Replace our existing auth with apptorID
+> Add forgot password flow
 
-> Set up multi-tenant authentication using apptorID
+> Configure email templates for my realm
 ```
 
-The skill will:
-1. Explore your codebase (no questions needed)
-2. Confirm what it found (1-2 questions max)
-3. Provision apptorID resources if MCP is connected
-4. Write all integration code into your project
-5. Run tests and self-review
+Each skill explores your codebase, asks one question at a time (interactive format), and writes production-ready code.
 
 ## Works Without MCP Too
 
-If you don't have access keys configured, the skill still works — it generates integration code with placeholder credentials and guides you through the apptorID Admin UI to set things up manually.
+Without access keys, the skills still work — they generate integration code with placeholder credentials and guide you through manual setup.
 
 ## Supported Tech Stacks
 
-The skill works with **any** tech stack. It has deep knowledge of:
+Works with **any** tech stack. Deep reference knowledge for:
 - **Backend**: Java/Spring, Java/Micronaut, Node/Express, Python/FastAPI
-- **Frontend**: React, Angular, Vue
-- **Multi-tenant**: Any ORM (Prisma, Sequelize, Hibernate, SQLAlchemy, etc.)
+- **Frontend**: React, Angular
+- **Multi-tenant**: Any ORM
 
-For other stacks (Go, Rust, PHP, .NET, Ruby, etc.), it builds the integration from OAuth2/OIDC protocol knowledge.
-
-## What Gets Created
-
-| Component | Description |
-|-----------|-------------|
-| OIDC Client Service | Discovery caching, PKCE, token exchange, refresh, user info |
-| Auth Routes | Login, callback, logout, refresh, user info endpoints |
-| JWT Middleware | JWKS-based signature validation, expiry check, role extraction |
-| Login Page | Dynamic — fetches IdPs, renders form + social buttons, matches your design system |
-| Callback Page | Handles auth code exchange, token storage, error display |
-| Password Reset | Triggers apptorID forgot-password flow |
-| Auth Context | Token state management, protected route guard, auto-refresh |
-| HTTP Interceptor | Attaches Bearer token, handles 401 refresh |
-| Config | Environment variables, .env.example |
-| Tests | Unit + integration tests using your project's test framework |
-| Multi-tenant (optional) | DB migration, encryption, tenant resolver |
+For other stacks, builds from OAuth2/OIDC protocol knowledge.
