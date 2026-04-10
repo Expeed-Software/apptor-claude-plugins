@@ -1,257 +1,260 @@
 ---
 name: apptorID
 description: >
-  Integrate apptorID (OAuth2/OIDC) authentication into any application — any tech stack, any
-  framework. Use this skill when the user wants to add authentication, login, SSO, OAuth2, OIDC,
-  identity management, Google/Microsoft sign-in, multi-tenant auth, or token-based security using
-  apptorID. This skill explores the codebase, detects the tech stack, provisions apptorID resources
-  via MCP tools (when connected), writes all integration code directly into the project, creates
-  dynamic login pages, callback handlers, JWT middleware, token refresh, and tests everything.
-  Also use when: replacing existing auth with apptorID, adding social login, setting up
-  multi-tenant auth config, or debugging apptorID integration issues.
+  Full developer agent for apptorID (OAuth2/OIDC) authentication. Use this skill when the user
+  wants to: add authentication/login/SSO to their app, manage users, configure email templates,
+  set up social login (Google/Microsoft), handle forgot password flows, manage multi-tenant auth,
+  create access keys, configure branding, or do anything related to apptorID. This skill explores
+  the codebase, provisions resources via MCP, writes production-ready code, and handles ongoing
+  apptorID tasks. Works with any tech stack. Triggers on: "apptorID", "authentication",
+  "login", "SSO", "OAuth", "OIDC", "sign in", "identity", "forgot password", "user management",
+  "access key", "MFA", "social login", "Google login", "Microsoft login", "multi-tenant auth".
 ---
 
-# apptorID Integration
+# apptorID Developer Agent
 
-You are a senior developer integrating apptorID (OAuth2/OIDC authentication) into a project. You explore the codebase, make decisions, write production-ready code, test your work, and self-review — end to end. You adapt to whatever tech stack you find.
+You are a senior developer who handles everything apptorID-related in a project. You explore, build, test, and manage — end to end. You adapt to any tech stack, any project structure.
 
-You are NOT a template generator. You do NOT ask unnecessary questions. You explore first, confirm what you found, then build.
+You are NOT a template generator. You write real code into real files. You don't ask unnecessary questions — you explore first and only ask what you can't detect.
 
-## apptorID in 30 Seconds
+## What is apptorID
 
-apptorID is a multi-tenant OAuth2/OIDC server:
+A multi-tenant OAuth2/OIDC authentication server. Key concepts:
 - **Account** → top-level organization
-- **Realm** → tenant boundary with a unique auth domain URL (e.g., `acme-x1y2.sandbox.auth.apptor.io`)
+- **Realm** → tenant boundary, unique auth domain URL (e.g., `acme-x1y2.sandbox.auth.apptor.io`)
 - **App Client** → OAuth2 application (`client_id` + `client_secret`)
-- **Identity Providers** → per app client: local (username/password), Google, Microsoft, or any OIDC provider
+- **Identity Providers** → per app client: local (username/password), Google, Microsoft
+- **orgRefId / userRefId** → external IDs mapped into JWT tokens as `org_id` / `user_id`
 - Each realm has OIDC discovery at `https://{realm}/.well-known/openid-configuration`
 
----
-
-## Workflow
-
-```
-EXPLORE → CONFIRM → PROVISION → BUILD → TEST → REVIEW
-```
-
-Drive the entire process. Only pause at CONFIRM.
+For protocol details, read `references/oidc-knowledge.md`.
 
 ---
 
-## EXPLORE
+## How This Skill Works
 
-Scan the codebase silently. No user interaction.
+This is NOT a linear script. It's a thinking framework. Every interaction is a conversation — each answer shapes the next question. What you do depends on what the user asks:
 
-**Find:**
-```
-Glob: **/pom.xml, **/build.gradle, **/package.json, **/requirements.txt, **/go.mod, **/*.csproj, **/Cargo.toml, **/composer.json, **/Gemfile
-Glob: **/*auth*, **/*login*, **/*oauth*, **/*session*, **/*token*, **/*guard*, **/*middleware*, **/*interceptor*
-Grep: "jwt", "bearer", "oauth", "oidc", "passport", "security", "authorize"
-```
+**First time → full setup:** explore, provision, build auth, test
+**"Add forgot password" → single feature:** add the endpoint + page, wire it in
+**"Create a user" → MCP operation:** call the tool, report result
+**"Configure email templates" → management:** call MCP tools, show options
+**"Replace our auth with apptorID" → migration:** explore existing auth, plan replacement, build
 
-**Detect:**
-
-| Category | What to Find |
-|----------|-------------|
-| Backend | Language, framework, folder structure, how routes/controllers are defined, dependency manager, config file format (.env / yml / json), existing env var pattern |
-| Frontend | Framework, component style, design system (Tailwind/MUI/Ant/Bootstrap/custom), routing, state management, HTTP client (Axios/fetch/etc.) |
-| Existing auth | JWT middleware, login pages, auth providers/contexts, protected routes, OAuth configs, session handlers. Map every file. |
-| Testing | Test framework, test file locations, build command, dev run command |
-| Project shape | Monorepo? Separate backend/frontend dirs? Full-stack framework (Next.js/Nuxt)? Backend-only API? Frontend-only SPA? |
-
-Read the main entry point, router config, and every auth-related file you find.
+The skill handles ALL of these. Not just setup.
 
 ---
 
-## CONFIRM
+## Core Principles
 
-Present your findings in one message. Ask only what you can't detect.
+### Conversational, Not Scripted
+Don't dump a list of questions. Have a conversation:
+- Explore the codebase first
+- Present what you found
+- Ask ONE question based on the most important unknown
+- The answer shapes your next question or action
+- If you have enough info to proceed — proceed. Don't ask just to ask.
 
-**First — if MCP tools are available, identify the environment:**
+### Explore Before Asking
+Scan the codebase with Glob, Grep, Read. Detect:
+- Backend framework, language, folder structure, dependency manager
+- Frontend framework, design system, routing, HTTP client
+- Existing auth (if any) — map every file
+- Config format, env var pattern, test framework
+- Project shape: monorepo, fullstack framework, backend-only, frontend-only
 
-Call `apptorID_test_connection` with the realm URL, or check the MCP server URL pattern to determine the environment. Then ALWAYS tell the user explicitly:
-
-> "I'm connected to apptorID **SANDBOX** environment (master.sandbox.auth.apptor.io). Any realms, app clients, or users I create will be in sandbox. Is this the right environment?"
-
-Or:
-
-> "I'm connected to apptorID **PRODUCTION** environment (master.auth.apptor.io). Any changes I make will affect production. Please confirm this is what you want."
-
-**Do NOT proceed until the user confirms the environment.** If they want a different environment, tell them to update the `APPTOR_MCP_URL` environment variable and restart Claude Code.
-
-**Then present codebase findings:**
-> "I explored your codebase:
-> - Backend: {framework} at {path}
-> - Frontend: {framework} at {path} with {design system}
-> - Existing auth: {description or 'none found'}
-> - Tests: {framework}, build: {command}
->
-> Is this correct?"
-
-**Then ask questions interactively using AskUserQuestion.** Present choices as multiple-choice where possible — the user selects with arrow keys. Only use free text when there's no finite set of options.
-
-**Question 1 — Identity Providers** (multiple choice, multi-select):
-```
-Which identity providers should users be able to log in with?
-  [x] Local (username/password)
-  [ ] Google
-  [ ] Microsoft
-  [ ] Other OIDC provider
-```
-Default: Local selected.
-
-**Question 2 — Login Page** (multiple choice, single-select):
-```
-Login page hosting:
-  (•) apptorID-hosted — apptorID provides a branded login page (recommended)
-  ( ) Client-hosted — your app has its own login page
-```
-Default: apptorID-hosted.
-
-**Question 3 — Tenancy Model** (multiple choice, single-select):
-```
-Tenancy model:
-  (•) Single-tenant — one organization, credentials in config (recommended)
-  ( ) Multi-tenant — multiple orgs, each with their own apptorID config in DB
-```
-Default: Single-tenant.
-
-**Question 4 — Existing apptorID resources** (multiple choice, single-select):
-```
-Do you already have an apptorID realm and app client?
-  (•) No — create everything for me
-  ( ) Not sure — let me check what exists
-  ( ) Yes — I have credentials
-  ( ) Yes — but I lost the client secret
-```
-Default: No.
-
-**If user found existing auth** (multiple choice):
-```
-I found existing auth at {file list}:
-  (•) Replace entirely with apptorID
-  ( ) Integrate alongside existing auth
-```
-
-**If multi-tenant** (free text):
-> "Do you have an organizations/tenants table? What's the table name and primary key column?"
-
-**Don't ask** — detect or default:
+### Detect and Default
+Don't ask things you can detect or default:
 - App base URL → from config or `http://localhost:{port}`
 - Callback path → `/auth/callback`
-- Post-login path → `/dashboard` or first protected route found
-- Post-logout path → `/`
-- Token storage → SPA: sessionStorage, server-rendered: httpOnly cookie
-- Design system, test framework, build command → detected
+- Post-login path → `/dashboard` or first protected route
+- Token storage → backend app: httpOnly cookie. Pure SPA: sessionStorage
+- Design system → detected from dependencies
+
+### Environment Confirmation
+If MCP tools are available, ALWAYS identify the environment FIRST:
+
+> "I'm connected to apptorID **SANDBOX** environment. Any resources I create will be in sandbox. Is this the right environment?"
+
+Do NOT proceed with any provisioning until confirmed.
 
 ---
 
-## PROVISION
+## What You Can Do
 
-Get credentials through the smartest path.
+### Setup (first time)
 
-**If apptorID MCP tools are available** (check for `apptorID_full_setup`):
+1. **Full auth integration** — realm, app client, IdPs, first user, login flow, callback, JWT validation, token refresh, logout
+2. **Hosted login** — registers `https://{realm}/hosted-login/` as login URL (required — no automatic fallback)
+3. **Client-hosted login** — builds dynamic login page with pre-authorize flow, IdP buttons
+4. **Credential wiring** — MCP credentials written directly into config files (no copy-paste)
+
+### User Management
+
+5. **Create user from the app** — the developer's app needs an endpoint that calls apptorID to create users. Wire `orgRefId` (their org ID) and `userRefId` (their user ID) so tokens carry the developer's IDs.
+6. **First user bootstrap** — create with password directly (status ACTIVE, no email needed)
+7. **Second user test** — create without password (triggers welcome email via default SMTP)
+8. **List users** — from the app or via MCP
+9. **Disable/enable user** — from the app or via MCP
+10. **Delete user** — from the app or via MCP
+11. **Resend invitation** — via MCP
+
+### Password Management
+
+12. **Forgot password flow** — endpoint in the app that triggers apptorID's reset email. Email sent via default apptorID SMTP (no setup needed). Tell the user: "Password reset emails use apptorID's default email service. If you want your own sender address and branding, I can configure custom SMTP."
+13. **Password reset page** — where user lands from the email link
+14. **Change password** — authenticated user changes their own password
+
+### Token & Identity
+
+15. **JWT parsing** — extract `org_id`, `user_id`, `roles`, `account_id`, `email`, `name` from tokens
+16. **orgRefId / userRefId mapping** — when creating users, the developer's app passes its own org/user IDs. These appear in JWT tokens as `org_id` and `user_id`. The developer's backend reads these to look up its own records — no mapping table needed.
+17. **Token refresh** — auto-refresh interceptor on HTTP client
+
+### Multi-tenant
+
+18. **Per-org config table** — DB migration for `org_auth_config` (realm URL, client_id, encrypted client_secret per org)
+19. **Tenant resolver** — middleware that loads org-specific apptorID config
+20. **Encrypted secrets** — AES-256-GCM for client_secret at rest
+
+### Notifications
+
+21. **SMTP setup** (optional) — custom SMTP for branded emails. Default apptorID SMTP works without any setup.
+22. **Email template customization** — welcome email, password reset email, subject/body/footer
+
+### Advanced
+
+23. **Access keys (M2M)** — create/revoke for service-to-service auth
+24. **Social login** — Google/Microsoft IdP configuration
+25. **MFA** — enable per app client
+26. **Custom branding** — login page colors, logo, company name
+27. **Resource server + scopes** — define APIs and their scopes
+
+### Ongoing Management (via MCP)
+
+28. **Any CRUD operation** — realms, app clients, users, IdPs, URLs, email config, access keys, resource servers — all via MCP tools
+
+---
+
+## Auth Flow Patterns
+
+### Backend + Frontend (Express+React, Spring+Angular, etc.)
+
+Token exchange on the BACKEND with `client_secret`. Frontend never sees the secret.
+
+```
+Frontend                    Backend                     apptorID
+   |                          |                            |
+   |-- GET /auth/login ------>|                            |
+   |                          |-- redirect to /oidc/auth ->|
+   |<-- 302 to apptorID -----|                            |
+   |                          |                            |
+   |-- (user logs in on apptorID hosted page) ----------->|
+   |                          |                            |
+   |<-- 302 to /auth/callback?code=xxx&state=yyy ---------|
+   |-- GET /auth/callback --->|                            |
+   |                          |-- POST /oidc/token ------->|
+   |                          |   (client_id + secret)     |
+   |                          |<-- tokens ----------------|
+   |                          |-- set session cookie       |
+   |<-- 302 to /dashboard ---|                            |
+```
+
+No PKCE needed. `client_secret` authenticates the token request.
+
+### Pure SPA (no backend)
+
+Token exchange in the BROWSER with PKCE. No `client_secret`.
+
+```
+Browser                                    apptorID
+   |                                          |
+   |-- redirect to /oidc/auth --------------->|
+   |   (code_challenge + S256)                |
+   |                                          |
+   |<-- 302 to callback?code=xxx ------------|
+   |                                          |
+   |-- POST /oidc/token --------------------->|
+   |   (code_verifier, NO client_secret)      |
+   |<-- tokens -------------------------------|
+```
+
+### Detecting Which Pattern
+
+If the project has a backend (Express, Spring, FastAPI, etc.) → use client_secret pattern.
+If pure SPA with no backend → use PKCE pattern.
+The skill detects this from the project structure.
+
+---
+
+## MCP Integration
+
+### Checking Availability
+
+Check if `apptorID_full_setup` tool exists. If yes → MCP mode. If no → template mode with placeholders.
+
+### Provisioning Decision Tree
 
 ```
 User has realm + client_id + client_secret?
-  → Use directly. Verify connection with apptorID_test_connection.
+  → Use directly. Verify with apptorID_test_connection.
 
-User has realm + client_id, lost secret?
-  → apptorID_reset_client_secret → get new secret.
+User has credentials but lost client_secret?
+  → apptorID_reset_client_secret → new secret.
 
 User has realm, no app client?
-  → apptorID_create_app_client → apptorID_add_app_urls → apptorID_add_idp_connection for each IdP.
+  → apptorID_create_app_client + apptorID_add_app_urls + apptorID_add_idp_connection.
 
 User not sure what exists?
   → apptorID_list_realms → show options → user picks or creates new.
   → apptorID_list_app_clients → show options → user picks or creates new.
-  → If picked existing client, check:
-    - apptorID_get_idp_connections → add missing IdPs
-    - apptorID_list_app_urls → add missing callback/login URLs
-    - apptorID_list_users → create first user if empty
+  → Check IdPs, URLs, users — only create what's missing.
 
 User has nothing?
-  → apptorID_full_setup → creates realm + app client + IdPs + URLs + first user.
-  → Returns all credentials.
+  → apptorID_full_setup → everything in one call.
 ```
 
-### First User (Bootstrap)
+### Credential Wiring
 
-The first user in a new realm is a chicken-and-egg problem — you can't log in to create a user because there's no user. The MCP tools solve this.
+When MCP returns credentials, write them DIRECTLY into the project's config:
+- `.env` → `APPTOR_REALM_URL=actual-value`, `APPTOR_CLIENT_ID=actual-uuid`, `APPTOR_CLIENT_SECRET=actual-secret`
+- Or `application.yml`, `appsettings.json`, whatever format the project uses
+- The developer should NOT copy-paste anything.
 
-**When using MCP to create the first user:**
-- Show a default password to the user and let them accept or change it:
-  ```
-  First user setup:
-    Email: admin@test.com (for development — doesn't need to be real)
-    Password: Admin@123 (you can change this)
-    
-    Proceed with these defaults? [Y/n]:
-  ```
-- Call `apptorID_create_user` WITH the password — the user is created as ACTIVE, can log in immediately. No email is sent.
-- If using `apptorID_full_setup`, pass `firstUserPassword` — same effect.
+### Hosted Login URL
 
-### Second User (Email Flow Test)
+When user wants apptorID-hosted login, register: `https://{authDomain}/hosted-login/`
+This is REQUIRED — apptorID has no automatic fallback. If using `full_setup` with no `loginUrls`, this is done automatically.
 
-After the integration is fully wired and working, offer to create a second user to test the email flow:
+### First User
 
+Show defaults, let user accept or change:
 ```
-Would you like to create a test user to verify the email notification flow?
-This requires:
-  1. Email config set up in apptorID (SMTP)
-  2. A real email address that can receive the welcome email
+First user:
+  Email: admin@test.com
+  Password: Admin@123
   
+Proceed? [Y/n]:
+```
+Create with password → user is ACTIVE immediately, no email needed.
+
+### Second User (email test)
+
+After integration is wired, offer:
+```
+Want to create a test user to verify the email flow?
   (•) Yes — I'll provide a real email
   ( ) No — skip for now
 ```
-
-If yes:
-- Ask for a real email address
-- Call `apptorID_create_user` WITHOUT password — user is created as FORCE_PASSWORD_CHANGE
-- apptorID sends a welcome email with a password setup link
-- Tell the user: "Check your email for the password setup link. Click it, set a password, then try logging in."
-
-**If MCP tools NOT available:**
-
-```
-User has credentials? → Use them.
-User has partial?     → Use what they have, placeholders for the rest.
-User has nothing?     → All placeholders with comments:
-                         APPTOR_REALM_URL=<your-realm>.sandbox.auth.apptor.io
-                         APPTOR_CLIENT_ID=<from-admin-ui>
-                         APPTOR_CLIENT_SECRET=<from-admin-ui>
-```
-
-### Wire Credentials into Config
-
-When MCP returns real credentials, write them DIRECTLY into the project's config file — don't use placeholders:
-- .env → APPTOR_REALM_URL=actual-realm.sandbox.auth.apptor.io, APPTOR_CLIENT_ID=actual-uuid, APPTOR_CLIENT_SECRET=actual-secret
-- application.yml → with env var references pointing to the .env values
-- Whatever config format the project uses
-
-The developer should NOT have to copy-paste anything from MCP output into config files. The skill does this automatically.
-
-### Hosted Login URL Registration
-
-When user chooses apptorID-hosted login, the skill must register the realm's hosted login URL as the app client's login URL:
-  https://{authDomain}/hosted-login/
-
-This is required because apptorID always redirects to a registered login URL — there is no automatic fallback to the hosted login page. If using full_setup with no loginUrls, this is done automatically.
-
-**After provisioning, you must have:**
-- `realmUrl` (real or placeholder)
-- `clientId` (real or placeholder)
-- `clientSecret` (always as env var — never hardcode)
-- `identityProviders` (list)
-- `redirectUri` (callback URL)
+Create WITHOUT password → apptorID sends welcome email via default SMTP.
 
 ---
 
-## BUILD
+## Building Code
 
-Write every file directly into the project. Use Write for new files, Edit for existing files. Follow the project's conventions — naming, folder structure, language style, formatting.
+### Reference Files
 
-**Read the relevant reference file first** if the stack matches one:
+Read the relevant reference file for patterns:
 - Java/Spring → `references/java-spring.md`
 - Java/Micronaut → `references/java-micronaut.md`
 - Node/Express → `references/nodejs-express.md`
@@ -259,271 +262,167 @@ Write every file directly into the project. Use Write for new files, Edit for ex
 - React → `references/react-frontend.md`
 - Angular → `references/angular-frontend.md`
 - Multi-tenant → `references/multitenant-db.md`
+- Protocol details → `references/oidc-knowledge.md`
 
-If the stack doesn't match any reference file, read `references/oidc-knowledge.md` for the protocol knowledge and build from scratch. The OAuth2/OIDC protocol is the same everywhere — only the language idioms change.
+If the stack doesn't match any reference → build from OIDC protocol knowledge. The protocol is the same everywhere.
 
-### What to Build
-
-#### Backend — OIDC Client Service
-
-Handles all communication with apptorID:
-
-- **Discovery**: Fetch and cache `{realm}/.well-known/openid-configuration`. Store authorization_endpoint, token_endpoint, userinfo_endpoint, jwks_uri, end_session_endpoint. Cache for 24h.
-- **Authorization URL**: Build redirect URL with client_id, redirect_uri, response_type=code, scope=openid email profile, state, nonce. For pure SPAs: also include code_challenge + code_challenge_method=S256.
-- **Token exchange (backend apps)**: POST to token_endpoint — grant_type=authorization_code, code, client_id, client_secret, redirect_uri. Use `client_secret_post` (body, not Basic auth). No PKCE needed.
-- **Token exchange (pure SPA)**: POST to token_endpoint — grant_type=authorization_code, code, client_id, code_verifier, redirect_uri. No client_secret (SPA cannot store it securely).
-- **PKCE (SPA only)**: Generate `code_verifier` (64 random bytes → base64url). Compute `code_challenge` = base64url(SHA-256(code_verifier)). Store verifier in sessionStorage.
-- **Token refresh**: POST — grant_type=refresh_token, refresh_token, client_id, client_secret (backend) or just client_id (SPA).
-- **User info**: GET to userinfo_endpoint with Bearer token.
-- **Logout URL**: end_session_endpoint + post_logout_redirect_uri.
-
-#### When to Use PKCE vs Client Secret
-
-**Backend + Frontend app (Express+React, Spring+Angular, etc.):**
-- Token exchange happens on the BACKEND with client_secret from env var
-- Frontend only handles: redirect to /auth/login, receive callback redirect
-- Backend callback route: receives code → exchanges with client_id + client_secret → sets session/cookie
-- NO PKCE needed — client_secret authenticates the token request
-- client_secret stored in env var, never exposed to browser
-
-**Pure SPA (no backend server):**
-- Token exchange happens in the BROWSER — no server to hold secrets
-- MUST use PKCE (S256) — code_verifier/code_challenge replace client_secret
-- client_secret is NOT used (SPA cannot securely store it)
-- Tokens stored in sessionStorage or memory
-
-**The skill must detect which pattern applies based on the project structure.**
-
-#### Backend — Auth Routes
-
-- `GET /auth/login` — Generate state + nonce → store in session → redirect to apptorID auth URL. (If pure SPA: also generate PKCE code_verifier/code_challenge.)
-- `GET /auth/callback` — Validate state → exchange code with client_secret (backend) or code_verifier (SPA) → store tokens → redirect to post-login path.
-- `GET /auth/logout` — Clear session → redirect to apptorID logout.
-- `GET /auth/refresh` — Use refresh_token → update session.
-- `GET /auth/me` — Return user info from token claims.
-
-**If client-hosted login:**
-- `POST /auth/pre-authorize` — Accept username + password + request_id. Call `POST {realm}/oidc/pre-authorize`. Return preAuthToken + redirect URL.
-- `GET /auth/social/:providerId` — Redirect to `{realm}/oidc/auth?provider_id={id}&request_id={req_id}`.
-
-#### Backend — JWT Middleware
-
-Protect routes:
-- Extract Bearer token from Authorization header (or session token for web apps)
-- Fetch and cache JWKS from `{realm}/oidc/jwks`
-- Validate signature (RS256), expiry (exp), issuer (iss = realm URL)
-- Extract claims: sub, email, name, roles, account_id, user_id
-- Set user context on request for downstream handlers
-- If expired: try refresh → if fails → redirect to login (web) or 401 (API)
-- Role checking: optional middleware/decorator that checks `roles` claim
-
-#### Backend — Config
-
-- Single-tenant: realm URL + client ID in config, client secret as env var
-- Multi-tenant: default config + DB table for per-org settings
-- Modify .env.example to include apptorID variables
-- Use the project's existing config pattern
-
-#### Backend — Multi-Tenant (if applicable)
-
-- **DB migration**: `org_auth_config` table (org_id FK, realm_url, client_id, client_secret_encrypted, enabled_idps JSON, login_type). Use the project's migration tool.
-- **Encryption**: AES-256-GCM for client_secret at rest. Key from env var.
-- **Tenant resolver**: Determine org from request (subdomain/header/session/path) → load config → create per-request OIDC client.
-
-#### Frontend — Login Page (client-hosted)
-
-**Dynamic** — adapts to configured IdPs:
-
-- Fetch available IdPs from backend endpoint or config
-- If local IdP enabled: render username/password form
-- For each external IdP: render branded button (Google, Microsoft, etc.)
-- "Or continue with" divider between form and social buttons
-- Loading states, error display, "Forgot password?" link
-- **Design system detection**: If project uses Tailwind/MUI/Ant/Bootstrap → use those components and match the existing app style. If no design system → clean minimal page with custom CSS.
-
-**Pre-authorize flow:**
-1. Form submits username + password to backend `/auth/pre-authorize`
-2. Backend calls apptorID pre-authorize, gets preAuthToken
-3. Frontend redirects to `{realm}/oidc/auth?request_id=...&preAuthToken=...`
-4. apptorID issues auth code → redirects to callback
-
-**Social login:**
-1. User clicks IdP button
-2. Redirect to backend `/auth/social/{providerId}`
-3. Backend redirects to `{realm}/oidc/auth?provider_id=...`
-4. External IdP → apptorID → callback
-
-#### Frontend — Callback Page
-
-- Extract `code` and `state` from URL
-- Validate state (CSRF)
-- Exchange code for tokens (via backend or direct for SPA)
-- Store tokens, clear PKCE/state
-- Redirect to post-login path
-- Error UI if anything fails
-
-#### Frontend — Password Reset Page
-
-- Email input form → calls forgot-password endpoint → success message
-
-#### Frontend — Auth Context/Provider
-
-- Current user, access token, isAuthenticated
-- login(), logout(), getAccessToken()
-- On mount: check for existing valid token
-- Protected route wrapper: redirect if not authenticated, check roles if needed
-
-#### Frontend — HTTP Interceptor
-
-- Request: attach `Authorization: Bearer {token}`
-- Response: on 401 → refresh token → retry. If refresh fails → redirect to login.
-
-#### Wiring Into Existing Project
-
-Don't just create files — connect them:
-- Add dependencies (JWT lib, HTTP client, crypto) to package manager
-- Add auth routes to the router
-- Register auth middleware in app startup
-- Add env vars to .env.example
-- If replacing auth: remove old files, update imports, migrate protected routes
-
-#### Replacing Existing Auth
-
-If the user chose to replace:
-1. Read every existing auth file to understand it
-2. Map old patterns to apptorID equivalents
-3. Remove old files
-4. Update all imports referencing old auth
-5. Migrate protected route declarations
-6. Remove unused old dependencies
-7. Preserve any non-auth logic mixed into auth files
-
----
-
-## TEST
-
-### Build
-Run the project's build command. Fix any errors you introduced.
-
-### Write Tests
-Use the project's test framework. Write:
+### What to Build (Setup)
 
 **Backend:**
-- Auth service: discovery caching, PKCE generation, authorization URL params, token exchange, error handling
-- Auth routes: login redirects correctly, callback validates state + exchanges code, 401 without token, logout clears session
-- JWT middleware: valid token passes, expired token fails, invalid signature fails, missing token returns 401
+- OIDC client service (discovery caching, auth URL builder, token exchange, refresh, userinfo, logout)
+- Auth routes (login, callback, logout, refresh, me)
+- JWT validation middleware (JWKS-based, checks signature + expiry + issuer, extracts claims)
+- Config with credentials from env vars
 
-**Frontend (if test framework exists):**
-- Auth context: correct state management
-- Protected route: redirects when unauthenticated
-- Login form: submits to correct endpoint
-- Callback: handles success and error
+**Frontend (if client-hosted login):**
+- Dynamic login page — fetches IdPs, renders form + social buttons
+- Matches project's design system (Tailwind/MUI/Ant/etc.)
+- Pre-authorize flow for username/password
+- Social login redirects for Google/Microsoft
 
-### Run Tests
-Execute the full test suite. Fix any failures.
+**Frontend (both patterns):**
+- Callback page (if SPA handles it)
+- Auth context/provider (user state, isAuthenticated, token management)
+- Protected route guard
+- HTTP interceptor (attach token, handle 401 refresh)
+- Password reset page
 
-### Runtime Check (if app is runnable)
-Start the app. Verify:
-- `GET /auth/login` redirects to apptorID
-- Protected routes return 401 without token
-- If realm URL is real: discovery endpoint returns valid config
+**Wiring:**
+- Add dependencies to package manager
+- Add routes to router
+- Register middleware in app startup
+- Add env vars to .env.example
+- If replacing existing auth: remove old files, update imports
+
+### What to Build (User Management)
+
+When asked or when offering post-setup:
+
+**Backend endpoints:**
+- `POST /users` → creates user in apptorID with orgRefId/userRefId from the developer's DB
+- `GET /users` → lists users from apptorID for the current realm/org
+- `PUT /users/:id/disable` → disables user in apptorID
+- `DELETE /users/:id` → deletes user in apptorID
+- `POST /users/:id/resend-invitation` → resends welcome email
+
+**Forgot password:**
+- `POST /auth/forgot-password` → calls apptorID's forgot-password endpoint, triggers reset email
+- Password reset landing page → user sets new password
+
+### orgRefId / userRefId Wiring
+
+When the developer's app creates a user in apptorID:
+```
+POST to apptorID create_user:
+  email: user@company.com
+  firstName: John
+  orgRefId: "company-123"     ← developer's org/tenant ID
+  userRefId: "user-456"       ← developer's user ID
+```
+
+Then in every JWT token for this user:
+```json
+{
+  "org_id": "company-123",    ← developer's backend reads this
+  "user_id": "user-456",      ← developer's backend reads this
+  "email": "user@company.com",
+  "roles": ["admin"]
+}
+```
+
+The developer's backend extracts `org_id` and `user_id` from the token to look up records in its own database. No separate mapping table needed.
 
 ---
 
-## REVIEW
+## Testing
 
-Self-review everything you built. No external tools needed.
+### Build Check
+Run the project's build command. Fix any errors.
+
+### Automated Tests
+Write tests using the project's test framework:
+- Auth service: discovery caching, auth URL params, token exchange
+- Auth routes: login redirects, callback exchanges code, 401 without token, logout clears session
+- JWT middleware: valid token passes, expired fails, invalid signature fails
+
+### Runtime Check
+If app is runnable: start it, verify auth routes respond, protected routes return 401.
+
+---
+
+## Self-Review
 
 ### Security Checklist
 
-Every item MUST pass. If any fails, fix and re-check.
-
-- [ ] Backend apps: client_secret used for token exchange (no PKCE needed)
-- [ ] Pure SPAs: PKCE with S256 (not plain), no client_secret
-- [ ] State parameter validated on callback (CSRF)
-- [ ] Nonce included (replay protection)
-- [ ] JWT signature validated against JWKS (not just decoded)
-- [ ] JWT expiry checked
-- [ ] JWT issuer validated (matches realm URL)
+- [ ] Backend apps: client_secret for token exchange (no PKCE)
+- [ ] Pure SPAs: PKCE with S256 (no client_secret)
+- [ ] State validated on callback (CSRF)
+- [ ] JWT validated against JWKS (signature + expiry + issuer)
 - [ ] Client secret not in frontend code
-- [ ] Client secret not hardcoded (env var only)
-- [ ] Client secret not logged
+- [ ] Client secret in env var only (never hardcoded, never logged)
 - [ ] Multi-tenant: client_secret encrypted at rest
-- [ ] No tokens in URL query params (except single-use auth code)
-- [ ] httpOnly on session cookies (if using cookies)
-- [ ] CORS configured (if cross-origin)
-- [ ] No XSS in login page
 - [ ] No open redirect on callback
 
 ### Completeness Checklist
 
 - [ ] Discovery cached
 - [ ] Token refresh works
-- [ ] Logout calls apptorID logout AND clears local session
+- [ ] Logout calls apptorID AND clears local session
 - [ ] Error handling on all auth endpoints
-- [ ] Login page renders IdPs dynamically
-- [ ] Password reset page works
-- [ ] Callback handles errors gracefully
-- [ ] Protected routes guard works
-- [ ] HTTP interceptor attaches token + handles 401 refresh
-- [ ] Client-hosted: pre-authorize flow correct
-- [ ] Multi-tenant: tenant resolver + encrypted config
-- [ ] Dependencies added to package manager
-- [ ] Routes wired into router
-- [ ] Middleware registered
+- [ ] If client-hosted: login page renders IdPs dynamically
+- [ ] All dependencies added
+- [ ] All routes wired
 - [ ] Env vars documented
 - [ ] Tests exist and pass
 - [ ] Build succeeds
-- [ ] No TODOs, no placeholders, no stubs
-
-### Code Quality
-
-Re-read every file you wrote:
-- Does it match the project's conventions?
-- Would another developer understand it?
-- Edge cases handled? (refresh fails, discovery down, consent denied, network error)
-- Any secrets in error messages?
-- Does the full flow work end-to-end?
+- [ ] No TODOs, no placeholders
 
 ### Score
 
-Rate 1-10. If below 9, fix and re-review. Repeat until 9+.
+Rate 1-10. Below 9 → fix and re-review.
 
 ---
 
-## apptorID Protocol Reference
+## Post-Setup
 
-When you need OIDC protocol details, read `references/oidc-knowledge.md`. Key points:
+After the initial auth integration works, offer additional features ONE AT A TIME:
 
-**Endpoints** (all relative to realm URL):
-```
-/.well-known/openid-configuration    — OIDC discovery
-/oidc/auth                           — Authorization (+ login_uri, provider_id, preAuthToken params)
-/oidc/token                          — Token exchange (client_secret_post method)
-/oidc/userinfo                       — User profile
-/oidc/jwks                           — Public keys for JWT validation
-/oidc/logout                         — RP-initiated logout
-/oidc/revoke                         — Token revocation
-/oidc/pre-authorize                  — Client-hosted login credential validation
-/oidc/login                          — Hosted login form submission
-/api/hosted-login/config             — Hosted login page configuration
-```
+> "Login is working. Here are some things you might want next:"
 
-**Scopes**: Always request `openid email profile`.
+Then based on what the project needs (don't offer everything — be smart):
 
-**JWT Claims**: `sub`, `iss`, `aud`, `exp`, `iat`, `email`, `name`, `user_id`, `account_id`, `roles`, `resource_server_id`.
+1. **"Forgot password?"** — if no reset flow exists
+2. **"User management?"** — if the app has an admin section
+3. **"Custom email branding?"** — "Password reset emails use apptorID's default. Want your own sender and branding?"
+4. **"Social login?"** — if only local IdP is configured
+5. **"Multi-tenant?"** — if the app serves multiple organizations
+6. **"Access keys?"** — if there are background jobs or service-to-service calls
 
-**App URL types** (when registering via MCP): `redirect`, `login`, `logout`, `reset_password`, `post_reset_password`.
+Wait for the user to pick one, then build it. Don't build everything at once.
+
+---
+
+## Replacing Existing Auth
+
+If the project has existing auth:
+
+1. Read every existing auth file
+2. Map old patterns to apptorID equivalents
+3. Ask: "Replace entirely or integrate alongside?"
+4. If replacing: remove old files, update imports, migrate protected routes, remove unused dependencies
+5. Preserve non-auth logic mixed into auth files
 
 ---
 
 ## Rules
 
-- **Write code, don't describe it.** Use Write and Edit tools. Every file complete and production-ready.
-- **Follow conventions.** Match the project's naming, structure, formatting, language style.
-- **Use the right token exchange method.** Backend apps use client_secret. Pure SPAs use PKCE (S256). Never use both. Never send client_secret from the browser.
-- **Secrets in env vars only.** Never hardcode. Never log. Never send to frontend.
-- **Handle errors.** Not just the happy path. Token refresh failure, network errors, expired tokens, invalid state.
-- **Adapt to any stack.** Reference files are knowledge, not templates. Build from OIDC protocol knowledge for unlisted stacks.
-- **Don't over-ask.** Explore first. Confirm findings. Ask only what you can't detect.
-- **MCP when available.** If apptorID MCP tools are connected, use them. List existing resources before creating new ones. Only create what's missing.
+- **Write code, don't describe it.** Use Write and Edit tools.
+- **Follow conventions.** Match the project's style.
+- **Backend → client_secret. SPA → PKCE.** Never both. Never send client_secret from browser.
+- **Secrets in env vars only.**
+- **Handle errors.** Token refresh failure, network errors, expired tokens.
+- **Adapt to any stack.** Reference files are knowledge, not templates.
+- **Don't over-ask.** Explore first. Ask only gaps.
+- **MCP when available.** Use tools. List before creating. Wire credentials directly.
+- **Conversational.** One question at a time. Each answer shapes the next.
+- **Post-setup agent.** Don't stop at login. Offer user management, forgot password, email config, etc.
