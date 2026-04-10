@@ -105,8 +105,9 @@ class ApptorOidcClient {
 
   /**
    * Build authorization URL for redirecting to apptorID login.
+   * Backend apps: no PKCE needed — client_secret authenticates the token exchange.
    */
-  buildAuthorizationUrl(state: string, codeChallenge: string, nonce: string): string {
+  buildAuthorizationUrl(state: string, nonce: string): string {
     const discovery = this.getDiscovery();
     const params = new URLSearchParams({
       client_id: apptorConfig.clientId,
@@ -115,16 +116,15 @@ class ApptorOidcClient {
       scope: apptorConfig.scopes,
       state,
       nonce,
-      code_challenge: codeChallenge,
-      code_challenge_method: 'S256',
     });
     return `${discovery.authorization_endpoint}?${params.toString()}`;
   }
 
   /**
-   * Exchange authorization code for tokens.
+   * Exchange authorization code for tokens using client_secret (backend flow).
+   * client_secret comes from process.env.APPTOR_CLIENT_SECRET — never exposed to browser.
    */
-  async exchangeCodeForTokens(code: string, codeVerifier: string): Promise<TokenResponse> {
+  async exchangeCodeForTokens(code: string): Promise<TokenResponse> {
     const discovery = this.getDiscovery();
     const params = new URLSearchParams({
       grant_type: 'authorization_code',
@@ -132,7 +132,6 @@ class ApptorOidcClient {
       client_id: apptorConfig.clientId,
       client_secret: apptorConfig.clientSecret,
       redirect_uri: apptorConfig.redirectUri,
-      code_verifier: codeVerifier,
     });
 
     const response = await axios.post<TokenResponse>(discovery.token_endpoint, params.toString(), {
@@ -221,58 +220,54 @@ export function generateSecureRandom(): string {
 import { Router, Request, Response } from 'express';
 import { oidcClient } from './oidcClient';
 import { apptorConfig } from './config';
-import { generateCodeVerifier, generateCodeChallenge, generateSecureRandom } from './pkce';
+import { generateSecureRandom } from './pkce';
 
 const authRouter = Router();
 
 /**
- * GET /auth/login — Initiates OAuth2 Authorization Code flow with PKCE.
+ * GET /auth/login — Initiates OAuth2 Authorization Code flow.
+ * Backend apps use client_secret for token exchange — no PKCE needed.
  */
 authRouter.get('/login', (req: Request, res: Response) => {
   const state = generateSecureRandom();
   const nonce = generateSecureRandom();
-  const codeVerifier = generateCodeVerifier();
-  const codeChallenge = generateCodeChallenge(codeVerifier);
 
   // Store in session for validation on callback
   req.session.oauthState = state;
   req.session.oauthNonce = nonce;
-  req.session.pkceVerifier = codeVerifier;
 
-  const authUrl = oidcClient.buildAuthorizationUrl(state, codeChallenge, nonce);
+  const authUrl = oidcClient.buildAuthorizationUrl(state, nonce);
   res.redirect(authUrl);
 });
 
 /**
- * GET /auth/callback — Handles OAuth2 redirect. Exchanges code for tokens.
+ * GET /auth/callback — Handles OAuth2 redirect.
+ * Receives ?code=xxx&state=xxx, validates state, exchanges code for tokens
+ * using client_id + client_secret (from process.env.APPTOR_CLIENT_SECRET),
+ * stores tokens in session, and redirects to dashboard.
  */
 authRouter.get('/callback', async (req: Request, res: Response) => {
   try {
     const { code, state } = req.query as { code: string; state: string };
 
-    // Validate state
+    // 1. Validate state (CSRF protection)
     if (!req.session.oauthState || req.session.oauthState !== state) {
       return res.status(403).json({ error: 'Invalid state — possible CSRF attack' });
     }
 
-    const codeVerifier = req.session.pkceVerifier;
-    if (!codeVerifier) {
-      return res.status(400).json({ error: 'Missing PKCE verifier — session may have expired' });
-    }
+    // 2. Exchange code for tokens using client_secret on the backend
+    const tokens = await oidcClient.exchangeCodeForTokens(code);
 
-    // Exchange code for tokens
-    const tokens = await oidcClient.exchangeCodeForTokens(code, codeVerifier);
-
-    // Store tokens in session
+    // 3. Store tokens in session
     req.session.accessToken = tokens.access_token;
     req.session.idToken = tokens.id_token;
     req.session.refreshToken = tokens.refresh_token;
 
-    // Clean up PKCE/state
+    // 4. Clean up state
     delete req.session.oauthState;
     delete req.session.oauthNonce;
-    delete req.session.pkceVerifier;
 
+    // 5. Redirect to dashboard
     res.redirect(apptorConfig.postLoginPath);
   } catch (error: any) {
     console.error('Auth callback error:', error.response?.data || error.message);
@@ -341,7 +336,6 @@ declare module 'express-session' {
   interface SessionData {
     oauthState?: string;
     oauthNonce?: string;
-    pkceVerifier?: string;
     accessToken?: string;
     idToken?: string;
     refreshToken?: string;

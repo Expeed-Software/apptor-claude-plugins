@@ -201,30 +201,29 @@ public class ApptorOidcClient {
 
     /**
      * Build the authorization URL for redirecting the user to apptorID login.
+     * Backend apps: no PKCE needed — client_secret authenticates the token exchange.
      */
-    public String buildAuthorizationUrl(String state, String codeChallenge, String nonce) {
+    public String buildAuthorizationUrl(String state, String nonce) {
         return getAuthorizationEndpoint()
                 + "?client_id=" + properties.getClientId()
                 + "&redirect_uri=" + properties.getRedirectUri()
                 + "&response_type=code"
                 + "&scope=" + properties.getScopes().replace(",", "%20")
                 + "&state=" + state
-                + "&nonce=" + nonce
-                + "&code_challenge=" + codeChallenge
-                + "&code_challenge_method=S256";
+                + "&nonce=" + nonce;
     }
 
     /**
-     * Exchange an authorization code for tokens.
+     * Exchange an authorization code for tokens using client_secret (backend flow).
+     * client_secret comes from application.yml / env var — never exposed to browser.
      */
-    public JsonNode exchangeCodeForTokens(String code, String codeVerifier) {
+    public JsonNode exchangeCodeForTokens(String code) {
         MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
         formData.add("grant_type", "authorization_code");
         formData.add("code", code);
         formData.add("client_id", properties.getClientId());
         formData.add("client_secret", properties.getClientSecret());
         formData.add("redirect_uri", properties.getRedirectUri());
-        formData.add("code_verifier", codeVerifier);
 
         return webClient.post()
                 .uri(getTokenEndpoint())
@@ -308,27 +307,28 @@ public class AuthController {
     }
 
     /**
-     * Initiates the OAuth2 Authorization Code flow with PKCE.
+     * Initiates the OAuth2 Authorization Code flow.
+     * Backend apps use client_secret for token exchange — no PKCE needed.
      * Redirects the user to apptorID's authorization endpoint.
      */
     @GetMapping("/login")
     public RedirectView login(HttpSession session) {
         String state = generateSecureRandom();
         String nonce = generateSecureRandom();
-        String codeVerifier = PkceUtil.generateCodeVerifier();
-        String codeChallenge = PkceUtil.generateCodeChallenge(codeVerifier);
 
-        // Store PKCE and state in session for validation on callback
+        // Store state in session for validation on callback
         session.setAttribute("oauth_state", state);
         session.setAttribute("oauth_nonce", nonce);
-        session.setAttribute("pkce_verifier", codeVerifier);
 
-        String authUrl = oidcClient.buildAuthorizationUrl(state, codeChallenge, nonce);
+        String authUrl = oidcClient.buildAuthorizationUrl(state, nonce);
         return new RedirectView(authUrl);
     }
 
     /**
-     * Handles the OAuth2 callback. Exchanges the authorization code for tokens.
+     * Handles the OAuth2 callback. Receives ?code=xxx&state=xxx,
+     * validates state, exchanges code for tokens using client_id + client_secret
+     * (from application.yml / env var), stores tokens in session,
+     * and redirects to dashboard.
      */
     @GetMapping("/callback")
     public RedirectView callback(
@@ -336,32 +336,27 @@ public class AuthController {
             @RequestParam("state") String state,
             HttpSession session
     ) {
-        // Validate state to prevent CSRF
+        // 1. Validate state to prevent CSRF
         String savedState = (String) session.getAttribute("oauth_state");
         if (savedState == null || !savedState.equals(state)) {
             throw new SecurityException("Invalid OAuth2 state parameter — possible CSRF attack");
         }
 
-        String codeVerifier = (String) session.getAttribute("pkce_verifier");
-        if (codeVerifier == null) {
-            throw new SecurityException("Missing PKCE verifier — session may have expired");
-        }
+        // 2. Exchange code for tokens using client_secret on the backend
+        JsonNode tokens = oidcClient.exchangeCodeForTokens(code);
 
-        // Exchange code for tokens
-        JsonNode tokens = oidcClient.exchangeCodeForTokens(code, codeVerifier);
-
-        // Store tokens in session
+        // 3. Store tokens in session
         session.setAttribute("access_token", tokens.get("access_token").asText());
         session.setAttribute("id_token", tokens.get("id_token").asText());
         if (tokens.has("refresh_token")) {
             session.setAttribute("refresh_token", tokens.get("refresh_token").asText());
         }
 
-        // Clean up PKCE/state
+        // 4. Clean up state
         session.removeAttribute("oauth_state");
         session.removeAttribute("oauth_nonce");
-        session.removeAttribute("pkce_verifier");
 
+        // 5. Redirect to dashboard
         return new RedirectView(properties.getPostLoginUri());
     }
 

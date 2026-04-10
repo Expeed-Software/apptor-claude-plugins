@@ -1,11 +1,31 @@
 # Angular Frontend — apptorID Integration Templates
 
+## Important: Two Integration Patterns
+
+**Pattern 1: Angular paired with a backend (Express, Spring, FastAPI, etc.)**
+- Angular does NOT do token exchange. It does NOT use PKCE.
+- Angular just redirects to `/auth/login` (a backend route) which starts the OAuth flow.
+- The backend callback route exchanges the code using client_secret, sets a session cookie.
+- Angular gets auth state from the session cookie set by the backend.
+- Angular does NOT need apptorClientId, apptorRealmUrl, or any auth environment config.
+- Protected routes check the session (e.g., call `/auth/me` to see if logged in).
+- Use the backend reference file (nodejs-express.md, java-spring.md, etc.) for the auth logic.
+
+**Pattern 2: Pure SPA (no backend server)**
+- Angular handles the full PKCE flow — generates code_verifier, redirects to apptorID, handles callback, exchanges code with code_verifier (no client_secret).
+- Tokens stored in sessionStorage or memory.
+- The code below applies to this pattern ONLY.
+
+**The skill must detect which pattern applies. If a backend exists, use Pattern 1 and skip the code below.**
+
+---
+
 ## Table of Contents
 1. [Dependencies](#dependencies)
-2. [Environment Config](#environment-config)
-3. [Auth Service](#auth-service)
+2. [Environment Config (SPA only)](#environment-config)
+3. [Auth Service (SPA only)](#auth-service)
 4. [Auth Guard](#auth-guard)
-5. [Auth Callback Component](#auth-callback-component)
+5. [Auth Callback Component (SPA only)](#auth-callback-component)
 6. [HTTP Interceptor](#http-interceptor)
 7. [Login Component (Client-Hosted)](#login-component-client-hosted)
 

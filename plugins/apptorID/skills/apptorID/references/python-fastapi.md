@@ -129,8 +129,10 @@ class ApptorOidcClient:
     def issuer(self) -> str:
         return self.discovery["issuer"]
 
-    def build_authorization_url(self, state: str, code_challenge: str, nonce: str) -> str:
-        """Build the authorization URL for redirecting to apptorID."""
+    def build_authorization_url(self, state: str, nonce: str) -> str:
+        """Build the authorization URL for redirecting to apptorID.
+        Backend apps: no PKCE needed — client_secret authenticates the token exchange.
+        """
         params = {
             "client_id": settings.apptor_client_id,
             "redirect_uri": settings.apptor_redirect_uri,
@@ -138,21 +140,20 @@ class ApptorOidcClient:
             "scope": settings.apptor_scopes,
             "state": state,
             "nonce": nonce,
-            "code_challenge": code_challenge,
-            "code_challenge_method": "S256",
         }
         query = "&".join(f"{k}={v}" for k, v in params.items())
         return f"{self.authorization_endpoint}?{query}"
 
-    async def exchange_code_for_tokens(self, code: str, code_verifier: str) -> dict[str, Any]:
-        """Exchange an authorization code for tokens."""
+    async def exchange_code_for_tokens(self, code: str) -> dict[str, Any]:
+        """Exchange an authorization code for tokens using client_secret (backend flow).
+        client_secret comes from env var APPTOR_CLIENT_SECRET — never exposed to browser.
+        """
         data = {
             "grant_type": "authorization_code",
             "code": code,
             "client_id": settings.apptor_client_id,
             "client_secret": settings.apptor_client_secret,
             "redirect_uri": settings.apptor_redirect_uri,
-            "code_verifier": code_verifier,
         }
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -235,54 +236,53 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from oidc_client import oidc_client
 from config import settings
-from pkce import generate_code_verifier, generate_code_challenge, generate_secure_random
+from pkce import generate_secure_random
 
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @auth_router.get("/login")
 async def login(request: Request) -> RedirectResponse:
-    """Initiates OAuth2 Authorization Code flow with PKCE."""
+    """Initiates OAuth2 Authorization Code flow.
+    Backend apps use client_secret for token exchange — no PKCE needed.
+    """
     state = generate_secure_random()
     nonce = generate_secure_random()
-    code_verifier = generate_code_verifier()
-    code_challenge = generate_code_challenge(code_verifier)
 
     # Store in session
     request.session["oauth_state"] = state
     request.session["oauth_nonce"] = nonce
-    request.session["pkce_verifier"] = code_verifier
 
-    auth_url = oidc_client.build_authorization_url(state, code_challenge, nonce)
+    auth_url = oidc_client.build_authorization_url(state, nonce)
     return RedirectResponse(url=auth_url)
 
 
 @auth_router.get("/callback")
 async def callback(request: Request, code: str, state: str) -> RedirectResponse:
-    """Handles OAuth2 redirect. Exchanges code for tokens."""
-    # Validate state
+    """Handles OAuth2 redirect. Receives ?code=xxx&state=xxx,
+    validates state, exchanges code for tokens using client_id + client_secret
+    (from env var APPTOR_CLIENT_SECRET), stores tokens in session,
+    and redirects to dashboard.
+    """
+    # 1. Validate state (CSRF protection)
     saved_state = request.session.get("oauth_state")
     if not saved_state or saved_state != state:
         raise HTTPException(status_code=403, detail="Invalid state — possible CSRF attack")
 
-    code_verifier = request.session.get("pkce_verifier")
-    if not code_verifier:
-        raise HTTPException(status_code=400, detail="Missing PKCE verifier — session expired")
+    # 2. Exchange code for tokens using client_secret on the backend
+    tokens = await oidc_client.exchange_code_for_tokens(code)
 
-    # Exchange code for tokens
-    tokens = await oidc_client.exchange_code_for_tokens(code, code_verifier)
-
-    # Store tokens in session
+    # 3. Store tokens in session
     request.session["access_token"] = tokens["access_token"]
     request.session["id_token"] = tokens["id_token"]
     if "refresh_token" in tokens:
         request.session["refresh_token"] = tokens["refresh_token"]
 
-    # Clean up
+    # 4. Clean up state
     request.session.pop("oauth_state", None)
     request.session.pop("oauth_nonce", None)
-    request.session.pop("pkce_verifier", None)
 
+    # 5. Redirect to dashboard
     return RedirectResponse(url=settings.post_login_path)
 
 

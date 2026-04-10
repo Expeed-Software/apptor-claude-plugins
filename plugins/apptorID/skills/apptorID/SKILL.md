@@ -222,6 +222,22 @@ User has nothing?     → All placeholders with comments:
                          APPTOR_CLIENT_SECRET=<from-admin-ui>
 ```
 
+### Wire Credentials into Config
+
+When MCP returns real credentials, write them DIRECTLY into the project's config file — don't use placeholders:
+- .env → APPTOR_REALM_URL=actual-realm.sandbox.auth.apptor.io, APPTOR_CLIENT_ID=actual-uuid, APPTOR_CLIENT_SECRET=actual-secret
+- application.yml → with env var references pointing to the .env values
+- Whatever config format the project uses
+
+The developer should NOT have to copy-paste anything from MCP output into config files. The skill does this automatically.
+
+### Hosted Login URL Registration
+
+When user chooses apptorID-hosted login, the skill must register the realm's hosted login URL as the app client's login URL:
+  https://{authDomain}/hosted-login/
+
+This is required because apptorID always redirects to a registered login URL — there is no automatic fallback to the hosted login page. If using full_setup with no loginUrls, this is done automatically.
+
 **After provisioning, you must have:**
 - `realmUrl` (real or placeholder)
 - `clientId` (real or placeholder)
@@ -253,17 +269,35 @@ If the stack doesn't match any reference file, read `references/oidc-knowledge.m
 Handles all communication with apptorID:
 
 - **Discovery**: Fetch and cache `{realm}/.well-known/openid-configuration`. Store authorization_endpoint, token_endpoint, userinfo_endpoint, jwks_uri, end_session_endpoint. Cache for 24h.
-- **PKCE**: Generate `code_verifier` (64 random bytes → base64url). Compute `code_challenge` = base64url(SHA-256(code_verifier)). Store verifier in session.
-- **Authorization URL**: Build redirect URL with client_id, redirect_uri, response_type=code, scope=openid email profile, state, nonce, code_challenge, code_challenge_method=S256.
-- **Token exchange**: POST to token_endpoint — grant_type=authorization_code, code, client_id, client_secret, redirect_uri, code_verifier. Use `client_secret_post` (body, not Basic auth).
-- **Token refresh**: POST — grant_type=refresh_token, refresh_token, client_id, client_secret.
+- **Authorization URL**: Build redirect URL with client_id, redirect_uri, response_type=code, scope=openid email profile, state, nonce. For pure SPAs: also include code_challenge + code_challenge_method=S256.
+- **Token exchange (backend apps)**: POST to token_endpoint — grant_type=authorization_code, code, client_id, client_secret, redirect_uri. Use `client_secret_post` (body, not Basic auth). No PKCE needed.
+- **Token exchange (pure SPA)**: POST to token_endpoint — grant_type=authorization_code, code, client_id, code_verifier, redirect_uri. No client_secret (SPA cannot store it securely).
+- **PKCE (SPA only)**: Generate `code_verifier` (64 random bytes → base64url). Compute `code_challenge` = base64url(SHA-256(code_verifier)). Store verifier in sessionStorage.
+- **Token refresh**: POST — grant_type=refresh_token, refresh_token, client_id, client_secret (backend) or just client_id (SPA).
 - **User info**: GET to userinfo_endpoint with Bearer token.
 - **Logout URL**: end_session_endpoint + post_logout_redirect_uri.
 
+#### When to Use PKCE vs Client Secret
+
+**Backend + Frontend app (Express+React, Spring+Angular, etc.):**
+- Token exchange happens on the BACKEND with client_secret from env var
+- Frontend only handles: redirect to /auth/login, receive callback redirect
+- Backend callback route: receives code → exchanges with client_id + client_secret → sets session/cookie
+- NO PKCE needed — client_secret authenticates the token request
+- client_secret stored in env var, never exposed to browser
+
+**Pure SPA (no backend server):**
+- Token exchange happens in the BROWSER — no server to hold secrets
+- MUST use PKCE (S256) — code_verifier/code_challenge replace client_secret
+- client_secret is NOT used (SPA cannot securely store it)
+- Tokens stored in sessionStorage or memory
+
+**The skill must detect which pattern applies based on the project structure.**
+
 #### Backend — Auth Routes
 
-- `GET /auth/login` — Generate PKCE + state + nonce → store in session → redirect to apptorID auth URL.
-- `GET /auth/callback` — Validate state → exchange code → store tokens → redirect to post-login path.
+- `GET /auth/login` — Generate state + nonce → store in session → redirect to apptorID auth URL. (If pure SPA: also generate PKCE code_verifier/code_challenge.)
+- `GET /auth/callback` — Validate state → exchange code with client_secret (backend) or code_verifier (SPA) → store tokens → redirect to post-login path.
 - `GET /auth/logout` — Clear session → redirect to apptorID logout.
 - `GET /auth/refresh` — Use refresh_token → update session.
 - `GET /auth/me` — Return user info from token claims.
@@ -404,7 +438,8 @@ Self-review everything you built. No external tools needed.
 
 Every item MUST pass. If any fails, fix and re-check.
 
-- [ ] PKCE with S256 (not plain)
+- [ ] Backend apps: client_secret used for token exchange (no PKCE needed)
+- [ ] Pure SPAs: PKCE with S256 (not plain), no client_secret
 - [ ] State parameter validated on callback (CSRF)
 - [ ] Nonce included (replay protection)
 - [ ] JWT signature validated against JWKS (not just decoded)
@@ -486,7 +521,7 @@ When you need OIDC protocol details, read `references/oidc-knowledge.md`. Key po
 
 - **Write code, don't describe it.** Use Write and Edit tools. Every file complete and production-ready.
 - **Follow conventions.** Match the project's naming, structure, formatting, language style.
-- **PKCE is non-negotiable.** Every authorization code flow uses S256 PKCE.
+- **Use the right token exchange method.** Backend apps use client_secret. Pure SPAs use PKCE (S256). Never use both. Never send client_secret from the browser.
 - **Secrets in env vars only.** Never hardcode. Never log. Never send to frontend.
 - **Handle errors.** Not just the happy path. Token refresh failure, network errors, expired tokens, invalid state.
 - **Adapt to any stack.** Reference files are knowledge, not templates. Build from OIDC protocol knowledge for unlisted stacks.

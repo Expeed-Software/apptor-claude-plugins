@@ -1,15 +1,35 @@
 # React Frontend — apptorID Integration Templates
 
+## Important: Two Integration Patterns
+
+**Pattern 1: React paired with a backend (Express, Spring, FastAPI, etc.)**
+- React does NOT do token exchange. It does NOT use PKCE.
+- React just redirects to `/auth/login` (a backend route) which starts the OAuth flow.
+- The backend callback route exchanges the code using client_secret, sets a session cookie.
+- React gets auth state from the session cookie set by the backend.
+- React does NOT need APPTOR_CLIENT_ID, APPTOR_REALM_URL, or any auth env vars.
+- Protected routes check the session (e.g., call `/auth/me` to see if logged in).
+- Use the backend reference file (nodejs-express.md, java-spring.md, etc.) for the auth logic.
+
+**Pattern 2: Pure SPA (no backend server)**
+- React handles the full PKCE flow — generates code_verifier, redirects to apptorID, handles callback, exchanges code with code_verifier (no client_secret).
+- Tokens stored in sessionStorage or memory.
+- The code below applies to this pattern ONLY.
+
+**The skill must detect which pattern applies. If a backend exists, use Pattern 1 and skip the code below.**
+
+---
+
 ## Table of Contents
 1. [Dependencies](#dependencies)
-2. [Auth Context & Provider](#auth-context--provider)
-3. [PKCE Utility](#pkce-utility)
+2. [Auth Context & Provider (SPA only)](#auth-context--provider)
+3. [PKCE Utility (SPA only)](#pkce-utility)
 4. [Auth Hook](#auth-hook)
 5. [Login Page (Client-Hosted)](#login-page-client-hosted)
-6. [Callback Handler](#callback-handler)
+6. [Callback Handler (SPA only)](#callback-handler)
 7. [Protected Route](#protected-route)
 8. [Social Login Buttons](#social-login-buttons)
-9. [Token Refresh](#token-refresh)
+9. [Token Refresh (SPA only)](#token-refresh)
 
 ---
 

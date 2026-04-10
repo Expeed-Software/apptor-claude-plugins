@@ -148,6 +148,39 @@ When the app hosts its own login page instead of using apptorID's hosted login:
 8. Continue with standard token exchange
 ```
 
+## Token Exchange: Client Secret vs PKCE
+
+apptorID supports two modes for exchanging an authorization code for tokens:
+
+**Mode 1: Client Secret (backend apps)**
+```
+POST {realm}/oidc/token
+  grant_type=authorization_code
+  code={code}
+  client_id={id}
+  client_secret={secret}
+  redirect_uri={callback}
+```
+
+Use when: the app has a backend server that can securely store client_secret.
+The callback URL is a BACKEND route — the browser never sees the client_secret.
+
+**Mode 2: PKCE (pure SPAs, no backend)**
+```
+POST {realm}/oidc/token
+  grant_type=authorization_code
+  code={code}
+  client_id={id}
+  code_verifier={verifier}
+  redirect_uri={callback}
+```
+
+Use when: no backend server exists. The browser handles the token exchange directly.
+client_secret is NOT sent — the code_verifier proves the caller is the same one who started the flow.
+
+**Rule:** If the project has a backend → use client_secret. If pure SPA → use PKCE.
+Never use both. Never send client_secret from the browser.
+
 ## Token Refresh
 
 ```
@@ -224,13 +257,27 @@ When registering URLs for an app client (via Admin UI or MCP tools):
 | `reset_password` | Password reset page URL |
 | `post_reset_password` | Where to redirect after password reset |
 
+## Hosted Login — URL Registration Required
+
+apptorID's hosted login page is at: `https://{realm-domain}/hosted-login/`
+
+IMPORTANT: The auth flow always redirects to a registered login URL. There is no automatic fallback to the hosted login page. You MUST register the hosted login URL as a "login" type URL on the app client:
+
+  URL: `https://{realm-domain}/hosted-login/`
+  Type: `login`
+
+When this is registered, the `/oidc/auth` endpoint redirects to:
+  `https://{realm-domain}/hosted-login/?request_id={request_id}`
+
+The hosted login page then fetches its config from `/api/hosted-login/config?requestId={request_id}` and renders the login form with configured IdPs.
+
 ## login_uri Parameter
 
 The `/oidc/auth` endpoint accepts an optional `login_uri` query parameter:
 - If provided: apptorID redirects to that URL with `?request_id=...` for client-hosted login
 - If not provided and one login URL is registered: uses that
 - If not provided and multiple registered: uses the first one
-- If not provided and none registered: shows apptorID's built-in hosted login page
+- If not provided and none registered: returns an error (no automatic fallback)
 
 ## Discovery Response Structure
 
