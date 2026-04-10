@@ -801,19 +801,19 @@ In your JWT validation filter, extract `org_id` and `user_id` from token claims 
 // After JWT validation in your filter:
 JWTClaimsSet claims = jwtProcessor.process(token, null);
 
-request.setAttribute("user_id", claims.getSubject());
-request.setAttribute("org_id", claims.getStringClaim("org_id"));       // from orgRefId
-request.setAttribute("user_ref_id", claims.getStringClaim("user_id")); // from userRefId
+request.setAttribute("sub", claims.getSubject());                        // internal user ID
+request.setAttribute("org_id", claims.getStringClaim("org_id"));         // from orgRefId
+request.setAttribute("user_id", claims.getStringClaim("user_id"));      // from userRefId
 request.setAttribute("email", claims.getStringClaim("email"));
 request.setAttribute("roles", claims.getStringListClaim("roles"));
 ```
 
-Then in your controller, access them via `@RequestAttribute`:
+Then in your controller, access them from the `HttpRequest`:
 
 ```java
 @Get
-public HttpResponse<?> listUsers(@RequestAttribute("org_id") String orgId) {
+public HttpResponse<?> listUsers(HttpRequest<?> request) {
+    String orgId = (String) request.getAttribute("org_id").orElse(null);
     // Use orgId to filter users for the current organization
     return HttpResponse.ok(adminClient.listUsers(realmId));
-}
 ```

@@ -24,7 +24,7 @@ Generates backend endpoints for creating, listing, getting, updating, disabling,
 
 ## Admin API Authentication
 
-apptorID's admin API uses **access keys** (NOT OAuth tokens):
+apptorID's admin API uses **access keys** (separate from the OAuth client credentials used for login):
 
 ```
 POST {realm}/oidc/token

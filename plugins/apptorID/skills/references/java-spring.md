@@ -1079,16 +1079,16 @@ public class UserManagementController {
 
 ### orgRefId / userRefId Extraction from JWT
 
-The apptorID access token includes `org_id` and `user_ref_id` custom claims.
+The apptorID access token includes `org_id` and `user_id` (from orgRefId/userRefId) custom claims.
 Extract them in your JWT filter after processing the token:
 
 ```java
 // In ApptorAuthFilter.doFilter() — after jwtProcessor.process():
 JWTClaimsSet claims = jwtProcessor.process(token, null);
 httpRequest.setAttribute("user_claims", claims);
-httpRequest.setAttribute("user_id", claims.getSubject());           // internal user ID
-httpRequest.setAttribute("user_ref_id", claims.getClaim("user_ref_id")); // your app's userRefId
-httpRequest.setAttribute("org_ref_id", claims.getClaim("org_id"));       // your app's orgRefId
+httpRequest.setAttribute("sub", claims.getSubject());                    // internal user ID
+httpRequest.setAttribute("user_id", claims.getClaim("user_id"));        // your app's userRefId
+httpRequest.setAttribute("org_id", claims.getClaim("org_id"));          // your app's orgRefId
 if (claims.getClaim("roles") != null) {
     httpRequest.setAttribute("user_roles", claims.getClaim("roles"));
 }
@@ -1096,9 +1096,9 @@ if (claims.getClaim("roles") != null) {
 // In a controller — read from the request:
 @GetMapping("/profile")
 public ResponseEntity<?> profile(HttpServletRequest request) {
-    String userRefId = (String) request.getAttribute("user_ref_id");
-    String orgRefId  = (String) request.getAttribute("org_ref_id");
-    // Use orgRefId to scope DB queries to the correct tenant/org
-    return ResponseEntity.ok(Map.of("userRefId", userRefId, "orgRefId", orgRefId));
+    String userId = (String) request.getAttribute("user_id");   // your app's userRefId
+    String orgId  = (String) request.getAttribute("org_id");    // your app's orgRefId
+    // Use orgId to scope DB queries to the correct tenant/org
+    return ResponseEntity.ok(Map.of("userId", userId, "orgId", orgId));
 }
 ```

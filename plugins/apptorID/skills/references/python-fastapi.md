@@ -802,7 +802,7 @@ async def set_password(realm_id: str, user_id: str, body: dict) -> None:
 
 ### orgRefId / userRefId Extraction from JWT
 
-The apptorID access token includes `org_id` and `user_ref_id` custom claims.
+The apptorID access token includes `org_id` and `user_id` (from orgRefId/userRefId) custom claims.
 Extract them in your `require_auth` dependency after validating the JWT:
 
 ```python
@@ -811,22 +811,17 @@ async def require_auth(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> dict[str, Any]:
-    """Returns decoded JWT claims including org_id and user_ref_id."""
+    """Returns decoded JWT claims including org_id and user_id."""
     claims = await _validate_token(credentials.credentials)  # or session token
-
-    # Standard OIDC claim
-    claims["user_id"] = claims.get("sub")          # internal user ID
-    # apptorID custom claims
-    claims["user_ref_id"] = claims.get("user_ref_id")  # your app's userRefId
-    claims["org_ref_id"] = claims.get("org_id")        # your app's orgRefId
+    # claims already contains: sub, org_id, user_id, email, roles
     return claims
 
 
 # In a route handler — use the claims:
 @app.get("/profile", dependencies=[Depends(require_auth)])
 async def profile(claims: dict = Depends(require_auth)):
-    user_ref_id = claims.get("user_ref_id")
-    org_ref_id = claims.get("org_ref_id")
-    # Use org_ref_id to scope DB queries to the correct tenant/org
-    return {"userRefId": user_ref_id, "orgRefId": org_ref_id}
+    user_id = claims.get("user_id")   # your app's userRefId
+    org_id = claims.get("org_id")     # your app's orgRefId
+    # Use org_id to scope DB queries to the correct tenant/org
+    return {"userId": user_id, "orgId": org_id}
 ```

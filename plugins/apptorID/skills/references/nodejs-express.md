@@ -869,14 +869,14 @@ export { userManagementRouter };
 
 ### orgRefId / userRefId Extraction from JWT
 
-The apptorID access token includes `org_id` and `user_ref_id` (userRefId) custom claims.
+The apptorID access token includes `org_id` and `user_id` (from orgRefId/userRefId) custom claims.
 Extract them in your middleware after verifying the JWT:
 
 ```typescript
 // In requireAuth middleware — after jwt.verify():
 (req as any).user = decoded;
 (req as any).userId = (decoded as any).sub;                  // internal user ID
-(req as any).userRefId = (decoded as any).user_ref_id;       // your app's userRefId
+(req as any).userRefId = (decoded as any).user_id;           // your app's userRefId
 (req as any).orgRefId = (decoded as any).org_id;             // your app's orgRefId
 (req as any).userRoles = (decoded as any).roles || [];
 
