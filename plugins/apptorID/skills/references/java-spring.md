@@ -738,3 +738,367 @@ public class TenantResolver {
 ```
 
 See `references/multitenant-db.md` for the `OrgAuthConfig` entity and repository.
+
+---
+
+## Admin API Client
+
+### application.yml (add admin credentials)
+
+```yaml
+apptor:
+  auth:
+    realm-url: https://${APPTOR_REALM_URL}
+    client-id: ${APPTOR_CLIENT_ID}
+    client-secret: ${APPTOR_CLIENT_SECRET}
+    redirect-uri: ${APP_BASE_URL}/auth/callback
+    post-login-uri: /dashboard
+    post-logout-uri: /
+    scopes: openid,email,profile
+  admin:
+    access-key-id: ${APPTOR_ADMIN_ACCESS_KEY_ID}
+    access-key-secret: ${APPTOR_ADMIN_ACCESS_KEY_SECRET}
+```
+
+### Admin Properties Class
+
+```java
+package {{basePackage}}.config;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
+
+@Component
+@ConfigurationProperties(prefix = "apptor.admin")
+public class ApptorAdminProperties {
+    private String accessKeyId;
+    private String accessKeySecret;
+
+    public String getAccessKeyId() { return accessKeyId; }
+    public void setAccessKeyId(String accessKeyId) { this.accessKeyId = accessKeyId; }
+    public String getAccessKeySecret() { return accessKeySecret; }
+    public void setAccessKeySecret(String accessKeySecret) { this.accessKeySecret = accessKeySecret; }
+}
+```
+
+### ApptorAdminClient (Spring @Service)
+
+```java
+package {{basePackage}}.admin;
+
+import {{basePackage}}.config.ApptorAdminProperties;
+import {{basePackage}}.config.ApptorAuthProperties;
+import com.fasterxml.jackson.databind.JsonNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.WebClient;
+
+import java.time.Instant;
+import java.util.Map;
+
+/**
+ * Admin API client for apptorID user management.
+ *
+ * Acquires an admin token via client_credentials grant using access_key_id /
+ * access_key_secret, caches it, and refreshes 60 seconds before expiry.
+ *
+ * Token endpoint:
+ *   POST {realmBaseUrl}/oidc/token
+ *   Content-Type: application/x-www-form-urlencoded
+ *   grant_type=client_credentials&access_key_id=...&access_key_secret=...
+ */
+@Service
+public class ApptorAdminClient {
+    private static final Logger log = LoggerFactory.getLogger(ApptorAdminClient.class);
+
+    private final ApptorAuthProperties authProperties;
+    private final ApptorAdminProperties adminProperties;
+    private final WebClient webClient;
+
+    private String cachedToken = null;
+    private Instant tokenExpiresAt = Instant.EPOCH;
+
+    public ApptorAdminClient(ApptorAuthProperties authProperties,
+                              ApptorAdminProperties adminProperties,
+                              WebClient.Builder webClientBuilder) {
+        this.authProperties = authProperties;
+        this.adminProperties = adminProperties;
+        this.webClient = webClientBuilder.build();
+    }
+
+    /**
+     * Returns a valid admin token, acquiring a new one if expired or absent.
+     * Synchronized to prevent concurrent token refreshes under load.
+     */
+    private synchronized String getAdminToken() {
+        if (cachedToken != null && Instant.now().isBefore(tokenExpiresAt.minusSeconds(60))) {
+            return cachedToken;
+        }
+
+        String realmBase = authProperties.getRealmUrl().startsWith("http")
+                ? authProperties.getRealmUrl()
+                : "https://" + authProperties.getRealmUrl();
+
+        MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
+        formData.add("grant_type", "client_credentials");
+        formData.add("access_key_id", adminProperties.getAccessKeyId());
+        formData.add("access_key_secret", adminProperties.getAccessKeySecret());
+
+        JsonNode response = webClient.post()
+                .uri(realmBase + "/oidc/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(BodyInserters.fromFormData(formData))
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .block();
+
+        if (response == null || !response.has("access_token")) {
+            throw new RuntimeException("Failed to acquire admin token from apptorID");
+        }
+
+        cachedToken = response.get("access_token").asText();
+        long expiresIn = response.has("expires_in") ? response.get("expires_in").asLong() : 3600L;
+        tokenExpiresAt = Instant.now().plusSeconds(expiresIn);
+        log.debug("Admin token acquired, expires in {}s", expiresIn);
+        return cachedToken;
+    }
+
+    private String realmApiBase() {
+        String base = authProperties.getRealmUrl().startsWith("http")
+                ? authProperties.getRealmUrl()
+                : "https://" + authProperties.getRealmUrl();
+        return base;
+    }
+
+    private JsonNode adminGet(String path) {
+        return webClient.get()
+                .uri(realmApiBase() + path)
+                .headers(h -> h.setBearerAuth(getAdminToken()))
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .block();
+    }
+
+    private JsonNode adminPost(String path, Object body) {
+        return webClient.post()
+                .uri(realmApiBase() + path)
+                .headers(h -> h.setBearerAuth(getAdminToken()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .block();
+    }
+
+    private JsonNode adminPut(String path, Object body) {
+        return webClient.put()
+                .uri(realmApiBase() + path)
+                .headers(h -> h.setBearerAuth(getAdminToken()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .block();
+    }
+
+    private JsonNode adminPatch(String path) {
+        return webClient.patch()
+                .uri(realmApiBase() + path)
+                .headers(h -> h.setBearerAuth(getAdminToken()))
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .block();
+    }
+
+    private void adminDelete(String path) {
+        webClient.delete()
+                .uri(realmApiBase() + path)
+                .headers(h -> h.setBearerAuth(getAdminToken()))
+                .retrieve()
+                .bodyToMono(Void.class)
+                .block();
+    }
+
+    /** Create a user in a realm. User map must include orgRefId. */
+    public JsonNode createUser(String realmId, Map<String, Object> user) {
+        return adminPost("/realms/" + realmId + "/users", user);
+    }
+
+    /** List users in a realm. */
+    public JsonNode listUsers(String realmId, int page, int size, String search) {
+        String query = "?page=" + page + "&size=" + size
+                + (search != null && !search.isBlank() ? "&search=" + search : "");
+        return adminGet("/realms/" + realmId + "/users" + query);
+    }
+
+    /** Get a single user by userId. */
+    public JsonNode getUser(String realmId, String userId) {
+        return adminGet("/realms/" + realmId + "/users/" + userId);
+    }
+
+    /** Update user profile fields. */
+    public JsonNode updateUser(String realmId, String userId, Map<String, Object> updates) {
+        return adminPut("/realms/" + realmId + "/users/" + userId, updates);
+    }
+
+    /** Disable (deactivate) a user account. */
+    public JsonNode disableUser(String realmId, String userId) {
+        return adminPatch("/realms/" + realmId + "/users/" + userId + "/disable");
+    }
+
+    /** Enable (reactivate) a user account. */
+    public JsonNode enableUser(String realmId, String userId) {
+        return adminPatch("/realms/" + realmId + "/users/" + userId + "/enable");
+    }
+
+    /** Permanently delete a user. */
+    public void deleteUser(String realmId, String userId) {
+        adminDelete("/realms/" + realmId + "/users/" + userId);
+    }
+
+    /** Trigger forgot-password email for the user. */
+    public JsonNode forgotPassword(String realmId, String email) {
+        return adminPost("/realms/" + realmId + "/users/forgot-password", Map.of("email", email));
+    }
+
+    /** Directly set a user's password (admin override). */
+    public JsonNode setPassword(String realmId, String userId, String newPassword, boolean temporary) {
+        return adminPost("/realms/" + realmId + "/users/" + userId + "/set-password",
+                Map.of("password", newPassword, "temporary", temporary));
+    }
+}
+```
+
+### UserManagementController (@RestController)
+
+```java
+package {{basePackage}}.admin;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
+
+/**
+ * REST endpoints for admin user management.
+ * Mount at /admin/realms/{realmId}/users.
+ * Protect these routes with your JWT filter + role check.
+ */
+@RestController
+@RequestMapping("/admin/realms/{realmId}/users")
+public class UserManagementController {
+
+    private final ApptorAdminClient adminClient;
+
+    public UserManagementController(ApptorAdminClient adminClient) {
+        this.adminClient = adminClient;
+    }
+
+    @GetMapping
+    public ResponseEntity<JsonNode> listUsers(
+            @PathVariable String realmId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String search) {
+        return ResponseEntity.ok(adminClient.listUsers(realmId, page, size, search));
+    }
+
+    @PostMapping
+    public ResponseEntity<JsonNode> createUser(
+            @PathVariable String realmId,
+            @RequestBody Map<String, Object> user) {
+        if (!user.containsKey("email") || !user.containsKey("orgRefId")) {
+            return ResponseEntity.badRequest().build();
+        }
+        JsonNode created = adminClient.createUser(realmId, user);
+        return ResponseEntity.status(HttpStatus.CREATED).body(created);
+    }
+
+    @GetMapping("/{userId}")
+    public ResponseEntity<JsonNode> getUser(
+            @PathVariable String realmId,
+            @PathVariable String userId) {
+        return ResponseEntity.ok(adminClient.getUser(realmId, userId));
+    }
+
+    @PutMapping("/{userId}")
+    public ResponseEntity<JsonNode> updateUser(
+            @PathVariable String realmId,
+            @PathVariable String userId,
+            @RequestBody Map<String, Object> updates) {
+        return ResponseEntity.ok(adminClient.updateUser(realmId, userId, updates));
+    }
+
+    @PatchMapping("/{userId}/disable")
+    public ResponseEntity<Void> disableUser(
+            @PathVariable String realmId,
+            @PathVariable String userId) {
+        adminClient.disableUser(realmId, userId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PatchMapping("/{userId}/enable")
+    public ResponseEntity<Void> enableUser(
+            @PathVariable String realmId,
+            @PathVariable String userId) {
+        adminClient.enableUser(realmId, userId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/{userId}")
+    public ResponseEntity<Void> deleteUser(
+            @PathVariable String realmId,
+            @PathVariable String userId) {
+        adminClient.deleteUser(realmId, userId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{userId}/set-password")
+    public ResponseEntity<Void> setPassword(
+            @PathVariable String realmId,
+            @PathVariable String userId,
+            @RequestBody Map<String, Object> body) {
+        String password = (String) body.get("password");
+        boolean temporary = Boolean.TRUE.equals(body.get("temporary"));
+        if (password == null || password.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+        adminClient.setPassword(realmId, userId, password, temporary);
+        return ResponseEntity.noContent().build();
+    }
+}
+```
+
+### orgRefId / userRefId Extraction from JWT
+
+The apptorID access token includes `org_id` and `user_ref_id` custom claims.
+Extract them in your JWT filter after processing the token:
+
+```java
+// In ApptorAuthFilter.doFilter() — after jwtProcessor.process():
+JWTClaimsSet claims = jwtProcessor.process(token, null);
+httpRequest.setAttribute("user_claims", claims);
+httpRequest.setAttribute("user_id", claims.getSubject());           // internal user ID
+httpRequest.setAttribute("user_ref_id", claims.getClaim("user_ref_id")); // your app's userRefId
+httpRequest.setAttribute("org_ref_id", claims.getClaim("org_id"));       // your app's orgRefId
+if (claims.getClaim("roles") != null) {
+    httpRequest.setAttribute("user_roles", claims.getClaim("roles"));
+}
+
+// In a controller — read from the request:
+@GetMapping("/profile")
+public ResponseEntity<?> profile(HttpServletRequest request) {
+    String userRefId = (String) request.getAttribute("user_ref_id");
+    String orgRefId  = (String) request.getAttribute("org_ref_id");
+    // Use orgRefId to scope DB queries to the correct tenant/org
+    return ResponseEntity.ok(Map.of("userRefId", userRefId, "orgRefId", orgRefId));
+}
+```
