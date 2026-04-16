@@ -266,10 +266,35 @@ public class ApptorOidcClient {
     }
 
     /**
+     * Revoke a refresh token at the apptorID revocation endpoint.
+     */
+    public void revokeRefreshToken(String refreshToken) {
+        String realmBase = properties.getRealmUrl().startsWith("http")
+                ? properties.getRealmUrl()
+                : "https://" + properties.getRealmUrl();
+
+        MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
+        formData.add("refresh_token", refreshToken);
+        formData.add("token_type_hint", "refresh_token");
+
+        webClient.post()
+                .uri(realmBase + "/oidc/revoke")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(BodyInserters.fromFormData(formData))
+                .retrieve()
+                .bodyToMono(Void.class)
+                .block();
+    }
+
+    /**
      * Build the logout URL.
      */
-    public String buildLogoutUrl(String postLogoutRedirectUri) {
-        return getEndSessionEndpoint() + "?post_logout_redirect_uri=" + postLogoutRedirectUri;
+    public String buildLogoutUrl(String postLogoutRedirectUri, String idTokenHint) {
+        String url = getEndSessionEndpoint() + "?post_logout_redirect_uri=" + postLogoutRedirectUri;
+        if (idTokenHint != null) {
+            url += "&id_token_hint=" + idTokenHint;
+        }
+        return url;
     }
 }
 ```
@@ -332,10 +357,18 @@ public class AuthController {
      */
     @GetMapping("/callback")
     public RedirectView callback(
-            @RequestParam("code") String code,
-            @RequestParam("state") String state,
+            @RequestParam(value = "code", required = false) String code,
+            @RequestParam(value = "state", required = false) String state,
+            @RequestParam(value = "error", required = false) String error,
+            @RequestParam(value = "error_description", required = false) String errorDescription,
             HttpSession session
     ) {
+        // 0. Check if apptorID returned an error
+        if (error != null) {
+            throw new RuntimeException("apptorID authorization error: " + error
+                    + (errorDescription != null ? " — " + errorDescription : ""));
+        }
+
         // 1. Validate state to prevent CSRF
         String savedState = (String) session.getAttribute("oauth_state");
         if (savedState == null || !savedState.equals(state)) {
@@ -381,12 +414,29 @@ public class AuthController {
     }
 
     /**
-     * Logs the user out — clears session and redirects to apptorID logout.
+     * Logs the user out — revokes refresh token, clears session,
+     * and redirects to apptorID logout.
      */
     @GetMapping("/logout")
     public RedirectView logout(HttpSession session) {
+        // 1. Revoke the refresh token
+        String refreshToken = (String) session.getAttribute("refresh_token");
+        if (refreshToken != null) {
+            try {
+                oidcClient.revokeRefreshToken(refreshToken);
+            } catch (Exception e) {
+                // Log but don't block logout if revocation fails
+            }
+        }
+
+        // 2. Build logout URL with id_token_hint before clearing session
+        String idToken = (String) session.getAttribute("id_token");
+        String logoutUrl = oidcClient.buildLogoutUrl(properties.getPostLogoutUri(), idToken);
+
+        // 3. Clear the local session
         session.invalidate();
-        String logoutUrl = oidcClient.buildLogoutUrl(properties.getPostLogoutUri());
+
+        // 4. Redirect to apptorID logout
         return new RedirectView(logoutUrl);
     }
 
@@ -612,8 +662,12 @@ public class ClientHostedLoginController {
         session.setAttribute("oauth_state", state);
         session.setAttribute("pkce_verifier", codeVerifier);
 
-        // Build the auth URL that will return a request_id via redirect
-        String authUrl = oidcClient.buildAuthorizationUrl(state, codeChallenge, state)
+        // Build the auth URL with PKCE params for client-hosted login
+        String nonce = PkceUtil.generateCodeVerifier().substring(0, 32);
+        session.setAttribute("oauth_nonce", nonce);
+        String authUrl = oidcClient.buildAuthorizationUrl(state, nonce)
+                + "&code_challenge=" + codeChallenge
+                + "&code_challenge_method=S256"
                 + "&login_uri=" + properties.getRedirectUri().replace("/callback", "/login-page");
 
         return ResponseEntity.ok(Map.of("authUrl", authUrl));
@@ -798,6 +852,8 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Map;
 
@@ -906,15 +962,6 @@ public class ApptorAdminClient {
                 .block();
     }
 
-    private JsonNode adminPatch(String path) {
-        return webClient.patch()
-                .uri(realmApiBase() + path)
-                .headers(h -> h.setBearerAuth(getAdminToken()))
-                .retrieve()
-                .bodyToMono(JsonNode.class)
-                .block();
-    }
-
     private void adminDelete(String path) {
         webClient.delete()
                 .uri(realmApiBase() + path)
@@ -930,47 +977,46 @@ public class ApptorAdminClient {
     }
 
     /** List users in a realm. */
-    public JsonNode listUsers(String realmId, int page, int size, String search) {
-        String query = "?page=" + page + "&size=" + size
-                + (search != null && !search.isBlank() ? "&search=" + search : "");
-        return adminGet("/realms/" + realmId + "/users" + query);
+    public JsonNode listUsers(String realmId) {
+        return adminGet("/realms/" + realmId + "/users");
     }
 
-    /** Get a single user by userId. */
-    public JsonNode getUser(String realmId, String userId) {
-        return adminGet("/realms/" + realmId + "/users/" + userId);
+    // IMPORTANT: userName (typically email) MUST be URL-encoded in paths.
+    // Emails like "mahesh.oa+1@expeed.com" contain + and @ which break URLs.
+    private String encodeUserName(String userName) {
+        return URLEncoder.encode(userName, StandardCharsets.UTF_8);
+    }
+
+    /** Get a single user by userName (email). */
+    public JsonNode getUser(String realmId, String userName) {
+        return adminGet("/realms/" + realmId + "/users/by-username/" + encodeUserName(userName));
     }
 
     /** Update user profile fields. */
-    public JsonNode updateUser(String realmId, String userId, Map<String, Object> updates) {
-        return adminPut("/realms/" + realmId + "/users/" + userId, updates);
+    public JsonNode updateUser(String realmId, String userName, Map<String, Object> updates) {
+        return adminPut("/realms/" + realmId + "/users/" + encodeUserName(userName), updates);
     }
 
     /** Disable (deactivate) a user account. */
-    public JsonNode disableUser(String realmId, String userId) {
-        return adminPatch("/realms/" + realmId + "/users/" + userId + "/disable");
+    public JsonNode disableUser(String realmId, String userName) {
+        return adminPut("/realms/" + realmId + "/users/" + encodeUserName(userName) + "/disable", Map.of());
     }
 
     /** Enable (reactivate) a user account. */
-    public JsonNode enableUser(String realmId, String userId) {
-        return adminPatch("/realms/" + realmId + "/users/" + userId + "/enable");
+    public JsonNode enableUser(String realmId, String userName) {
+        return adminPut("/realms/" + realmId + "/users/" + encodeUserName(userName) + "/enable", Map.of());
     }
 
     /** Permanently delete a user. */
-    public void deleteUser(String realmId, String userId) {
-        adminDelete("/realms/" + realmId + "/users/" + userId);
+    public void deleteUser(String realmId, String userName) {
+        adminDelete("/realms/" + realmId + "/users/" + encodeUserName(userName));
     }
 
-    /** Trigger forgot-password email for the user. */
-    public JsonNode forgotPassword(String realmId, String email) {
-        return adminPost("/realms/" + realmId + "/users/forgot-password", Map.of("email", email));
+    /** Trigger forgot-password email. Requires appClientId so the email contains the correct app URLs. */
+    public JsonNode forgotPassword(String appClientId, String userName) {
+        return adminPost("/app-clients/" + appClientId + "/users/" + encodeUserName(userName) + "/forgot-password", Map.of());
     }
 
-    /** Directly set a user's password (admin override). */
-    public JsonNode setPassword(String realmId, String userId, String newPassword, boolean temporary) {
-        return adminPost("/realms/" + realmId + "/users/" + userId + "/set-password",
-                Map.of("password", newPassword, "temporary", temporary));
-    }
 }
 ```
 
@@ -1003,77 +1049,60 @@ public class UserManagementController {
     }
 
     @GetMapping
-    public ResponseEntity<JsonNode> listUsers(
-            @PathVariable String realmId,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
-            @RequestParam(required = false) String search) {
-        return ResponseEntity.ok(adminClient.listUsers(realmId, page, size, search));
+    public ResponseEntity<JsonNode> listUsers(@PathVariable String realmId) {
+        return ResponseEntity.ok(adminClient.listUsers(realmId));
     }
 
     @PostMapping
     public ResponseEntity<JsonNode> createUser(
             @PathVariable String realmId,
             @RequestBody Map<String, Object> user) {
-        if (!user.containsKey("email") || !user.containsKey("orgRefId")) {
+        if (!user.containsKey("firstName") || !user.containsKey("email") || !user.containsKey("accountId")) {
             return ResponseEntity.badRequest().build();
         }
         JsonNode created = adminClient.createUser(realmId, user);
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
-    @GetMapping("/{userId}")
+    @GetMapping("/{userName}")
     public ResponseEntity<JsonNode> getUser(
             @PathVariable String realmId,
-            @PathVariable String userId) {
-        return ResponseEntity.ok(adminClient.getUser(realmId, userId));
+            @PathVariable String userName) {
+        return ResponseEntity.ok(adminClient.getUser(realmId, userName));
     }
 
-    @PutMapping("/{userId}")
+    @PutMapping("/{userName}")
     public ResponseEntity<JsonNode> updateUser(
             @PathVariable String realmId,
-            @PathVariable String userId,
+            @PathVariable String userName,
             @RequestBody Map<String, Object> updates) {
-        return ResponseEntity.ok(adminClient.updateUser(realmId, userId, updates));
+        return ResponseEntity.ok(adminClient.updateUser(realmId, userName, updates));
     }
 
-    @PatchMapping("/{userId}/disable")
+    @PutMapping("/{userName}/disable")
     public ResponseEntity<Void> disableUser(
             @PathVariable String realmId,
-            @PathVariable String userId) {
-        adminClient.disableUser(realmId, userId);
+            @PathVariable String userName) {
+        adminClient.disableUser(realmId, userName);
         return ResponseEntity.noContent().build();
     }
 
-    @PatchMapping("/{userId}/enable")
+    @PutMapping("/{userName}/enable")
     public ResponseEntity<Void> enableUser(
             @PathVariable String realmId,
-            @PathVariable String userId) {
-        adminClient.enableUser(realmId, userId);
+            @PathVariable String userName) {
+        adminClient.enableUser(realmId, userName);
         return ResponseEntity.noContent().build();
     }
 
-    @DeleteMapping("/{userId}")
+    @DeleteMapping("/{userName}")
     public ResponseEntity<Void> deleteUser(
             @PathVariable String realmId,
-            @PathVariable String userId) {
-        adminClient.deleteUser(realmId, userId);
+            @PathVariable String userName) {
+        adminClient.deleteUser(realmId, userName);
         return ResponseEntity.noContent().build();
     }
 
-    @PostMapping("/{userId}/set-password")
-    public ResponseEntity<Void> setPassword(
-            @PathVariable String realmId,
-            @PathVariable String userId,
-            @RequestBody Map<String, Object> body) {
-        String password = (String) body.get("password");
-        boolean temporary = Boolean.TRUE.equals(body.get("temporary"));
-        if (password == null || password.isBlank()) {
-            return ResponseEntity.badRequest().build();
-        }
-        adminClient.setPassword(realmId, userId, password, temporary);
-        return ResponseEntity.noContent().build();
-    }
 }
 ```
 

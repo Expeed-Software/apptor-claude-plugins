@@ -170,11 +170,29 @@ class ApptorOidcClient {
   }
 
   /**
+   * Revoke a refresh token at the apptorID revocation endpoint.
+   */
+  async revokeRefreshToken(refreshToken: string): Promise<void> {
+    const params = new URLSearchParams({
+      refresh_token: refreshToken,
+      token_type_hint: 'refresh_token',
+    });
+
+    await axios.post(`${apptorConfig.realmBaseUrl}/oidc/revoke`, params.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+  }
+
+  /**
    * Build logout URL.
    */
-  buildLogoutUrl(postLogoutRedirectUri: string): string {
+  buildLogoutUrl(postLogoutRedirectUri: string, idTokenHint?: string): string {
     const discovery = this.getDiscovery();
-    return `${discovery.end_session_endpoint}?post_logout_redirect_uri=${encodeURIComponent(postLogoutRedirectUri)}`;
+    let url = `${discovery.end_session_endpoint}?post_logout_redirect_uri=${encodeURIComponent(postLogoutRedirectUri)}`;
+    if (idTokenHint) {
+      url += `&id_token_hint=${encodeURIComponent(idTokenHint)}`;
+    }
+    return url;
   }
 
   /**
@@ -248,7 +266,18 @@ authRouter.get('/login', (req: Request, res: Response) => {
  */
 authRouter.get('/callback', async (req: Request, res: Response) => {
   try {
-    const { code, state } = req.query as { code: string; state: string };
+    const { code, state, error, error_description } = req.query as {
+      code: string; state: string; error?: string; error_description?: string;
+    };
+
+    // 0. Check if apptorID returned an error
+    if (error) {
+      console.error('apptorID authorization error:', error, error_description);
+      return res.status(400).json({
+        error: 'authorization_error',
+        message: error_description || error,
+      });
+    }
 
     // 1. Validate state (CSRF protection)
     if (!req.session.oauthState || req.session.oauthState !== state) {
@@ -299,10 +328,24 @@ authRouter.get('/refresh', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /auth/logout — Clears session and redirects to apptorID logout.
+ * GET /auth/logout — Revokes refresh token, clears session,
+ * and redirects to apptorID logout.
  */
-authRouter.get('/logout', (req: Request, res: Response) => {
-  const logoutUrl = oidcClient.buildLogoutUrl(apptorConfig.postLogoutPath);
+authRouter.get('/logout', async (req: Request, res: Response) => {
+  // 1. Revoke the refresh token
+  if (req.session.refreshToken) {
+    try {
+      await oidcClient.revokeRefreshToken(req.session.refreshToken);
+    } catch (err) {
+      // Log but don't block logout if revocation fails
+      console.error('Failed to revoke refresh token:', err);
+    }
+  }
+
+  // 2. Build logout URL with id_token_hint before destroying session
+  const logoutUrl = oidcClient.buildLogoutUrl(apptorConfig.postLogoutPath, req.session.idToken);
+
+  // 3. Clear the local session and redirect to apptorID logout
   req.session.destroy(() => {
     res.redirect(logoutUrl);
   });
@@ -709,48 +752,43 @@ class ApptorAdminClient {
   }
 
   /** List users in a realm. */
-  async listUsers(realmId: string, params?: { page?: number; size?: number; search?: string }): Promise<any> {
-    const query = params ? '?' + new URLSearchParams(params as any).toString() : '';
-    return this.adminRequest('GET', `/realms/${realmId}/users${query}`);
+  async listUsers(realmId: string): Promise<any> {
+    return this.adminRequest('GET', `/realms/${realmId}/users`);
   }
 
-  /** Get a single user by userId. */
-  async getUser(realmId: string, userId: string): Promise<any> {
-    return this.adminRequest('GET', `/realms/${realmId}/users/${userId}`);
+  // IMPORTANT: userName (typically email) MUST be URL-encoded in paths.
+  // Emails like "mahesh.oa+1@expeed.com" contain + and @ which break URLs.
+
+  /** Get a single user by userName (email). */
+  async getUser(realmId: string, userName: string): Promise<any> {
+    return this.adminRequest('GET', `/realms/${realmId}/users/by-username/${encodeURIComponent(userName)}`);
   }
 
   /** Update a user's profile fields. */
-  async updateUser(realmId: string, userId: string, updates: Partial<UserCreateRequest>): Promise<any> {
-    return this.adminRequest('PUT', `/realms/${realmId}/users/${userId}`, updates);
+  async updateUser(realmId: string, userName: string, updates: Partial<UserCreateRequest>): Promise<any> {
+    return this.adminRequest('PUT', `/realms/${realmId}/users/${encodeURIComponent(userName)}`, updates);
   }
 
   /** Disable (deactivate) a user account. */
-  async disableUser(realmId: string, userId: string): Promise<any> {
-    return this.adminRequest('PATCH', `/realms/${realmId}/users/${userId}/disable`);
+  async disableUser(realmId: string, userName: string): Promise<any> {
+    return this.adminRequest('PUT', `/realms/${realmId}/users/${encodeURIComponent(userName)}/disable`);
   }
 
   /** Enable (reactivate) a user account. */
-  async enableUser(realmId: string, userId: string): Promise<any> {
-    return this.adminRequest('PATCH', `/realms/${realmId}/users/${userId}/enable`);
+  async enableUser(realmId: string, userName: string): Promise<any> {
+    return this.adminRequest('PUT', `/realms/${realmId}/users/${encodeURIComponent(userName)}/enable`);
   }
 
   /** Permanently delete a user. */
-  async deleteUser(realmId: string, userId: string): Promise<void> {
-    await this.adminRequest('DELETE', `/realms/${realmId}/users/${userId}`);
+  async deleteUser(realmId: string, userName: string): Promise<void> {
+    await this.adminRequest('DELETE', `/realms/${realmId}/users/${encodeURIComponent(userName)}`);
   }
 
-  /** Trigger a forgot-password email for the user. */
-  async forgotPassword(realmId: string, email: string): Promise<any> {
-    return this.adminRequest('POST', `/realms/${realmId}/users/forgot-password`, { email });
+  /** Trigger a forgot-password email. Requires appClientId so the email contains the correct app URLs. */
+  async forgotPassword(appClientId: string, userName: string): Promise<any> {
+    return this.adminRequest('POST', `/app-clients/${appClientId}/users/${encodeURIComponent(userName)}/forgot-password`, {});
   }
 
-  /** Directly set a user's password (admin override). */
-  async setPassword(realmId: string, userId: string, newPassword: string, temporary = false): Promise<any> {
-    return this.adminRequest('POST', `/realms/${realmId}/users/${userId}/set-password`, {
-      password: newPassword,
-      temporary,
-    });
-  }
 }
 
 export const adminClient = new ApptorAdminClient();
@@ -771,91 +809,77 @@ const userManagementRouter = Router();
 userManagementRouter.get('/', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
   try {
     const { realmId } = req.params;
-    const { page, size, search } = req.query as Record<string, string>;
-    const users = await adminClient.listUsers(realmId, { page: Number(page) || 0, size: Number(size) || 20, search });
+    const users = await adminClient.listUsers(realmId);
     res.json(users);
   } catch (error: any) {
     res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
   }
 });
 
-/** POST /admin/users — Create a new user. orgRefId required in body. */
+/** POST /admin/users — Create a new user. firstName, email, accountId required in body. */
 userManagementRouter.post('/', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
   try {
     const { realmId } = req.params;
-    const { email, firstName, lastName, orgRefId, ...rest } = req.body;
-    if (!email || !orgRefId) {
-      return res.status(400).json({ error: 'email and orgRefId are required' });
+    const { firstName, email, accountId, lastName, orgRefId, ...rest } = req.body;
+    if (!firstName || !email || !accountId) {
+      return res.status(400).json({ error: 'firstName, email, and accountId are required' });
     }
-    const user = await adminClient.createUser(realmId, { email, firstName, lastName, orgRefId, ...rest });
+    const user = await adminClient.createUser(realmId, { firstName, email, accountId, lastName, orgRefId, ...rest });
     res.status(201).json(user);
   } catch (error: any) {
     res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
   }
 });
 
-/** GET /admin/users/:userId — Get a single user. */
-userManagementRouter.get('/:userId', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+/** GET /admin/users/:userName — Get a single user by userName (email). */
+userManagementRouter.get('/:userName', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
   try {
-    const { realmId, userId } = req.params;
-    const user = await adminClient.getUser(realmId, userId);
+    const { realmId, userName } = req.params;
+    const user = await adminClient.getUser(realmId, userName);
     res.json(user);
   } catch (error: any) {
     res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
   }
 });
 
-/** PUT /admin/users/:userId — Update a user. */
-userManagementRouter.put('/:userId', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+/** PUT /admin/users/:userName — Update a user. */
+userManagementRouter.put('/:userName', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
   try {
-    const { realmId, userId } = req.params;
-    const user = await adminClient.updateUser(realmId, userId, req.body);
+    const { realmId, userName } = req.params;
+    const user = await adminClient.updateUser(realmId, userName, req.body);
     res.json(user);
   } catch (error: any) {
     res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
   }
 });
 
-/** PATCH /admin/users/:userId/disable — Disable a user. */
-userManagementRouter.patch('/:userId/disable', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+/** PUT /admin/users/:userName/disable — Disable a user. */
+userManagementRouter.put('/:userName/disable', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
   try {
-    const { realmId, userId } = req.params;
-    await adminClient.disableUser(realmId, userId);
+    const { realmId, userName } = req.params;
+    await adminClient.disableUser(realmId, userName);
     res.status(204).send();
   } catch (error: any) {
     res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
   }
 });
 
-/** PATCH /admin/users/:userId/enable — Enable a user. */
-userManagementRouter.patch('/:userId/enable', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+/** PUT /admin/users/:userName/enable — Enable a user. */
+userManagementRouter.put('/:userName/enable', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
   try {
-    const { realmId, userId } = req.params;
-    await adminClient.enableUser(realmId, userId);
+    const { realmId, userName } = req.params;
+    await adminClient.enableUser(realmId, userName);
     res.status(204).send();
   } catch (error: any) {
     res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
   }
 });
 
-/** DELETE /admin/users/:userId — Delete a user. */
-userManagementRouter.delete('/:userId', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
+/** DELETE /admin/users/:userName — Delete a user. */
+userManagementRouter.delete('/:userName', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
   try {
-    const { realmId, userId } = req.params;
-    await adminClient.deleteUser(realmId, userId);
-    res.status(204).send();
-  } catch (error: any) {
-    res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
-  }
-});
-
-/** POST /admin/users/:userId/set-password — Admin password reset. */
-userManagementRouter.post('/:userId/set-password', requireAuth, requireRoles('admin'), async (req: Request, res: Response) => {
-  try {
-    const { realmId, userId } = req.params;
-    const { password, temporary } = req.body;
-    if (!password) return res.status(400).json({ error: 'password is required' });
-    await adminClient.setPassword(realmId, userId, password, temporary ?? false);
+    const { realmId, userName } = req.params;
+    await adminClient.deleteUser(realmId, userName);
     res.status(204).send();
   } catch (error: any) {
     res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });

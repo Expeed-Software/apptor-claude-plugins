@@ -23,6 +23,30 @@ A multi-tenant OAuth2/OIDC authentication server. Hierarchy: **Account → Realm
 
 For protocol details, read `references/oidc-knowledge.md`.
 
+## MANDATORY: Read API Spec First
+
+Before writing ANY integration code, read `references/apptorID-api-spec.md`. This is the single source of truth for all endpoint URLs, parameter names, request formats, and URL routing rules. Do NOT guess parameter names or endpoint paths.
+
+## HARD GATE: Explore and Confirm Before Building
+
+**You MUST complete ALL of these steps before writing ANY code. No exceptions.**
+
+1. **Scan the codebase** — use Glob, Grep, Read to find:
+   - Existing login pages, auth pages, or auth-related components
+   - Existing auth middleware, guards, interceptors
+   - Config files with auth settings
+   - Existing routes/pages the user has already built
+2. **Present findings to the user** — "I found these existing pages/components: [list]. I found this existing auth setup: [details]."
+3. **Ask about login page preference** — "Do you want:
+   (A) **Hosted login** — redirect to apptorID's hosted login page (no login UI in your app)
+   (B) **In-app login page** — build a login form in your app that calls apptorID's pre-authorize endpoint
+   (C) **Use your existing login page** — I found [page] in your repo, integrate apptorID into it"
+   **Wait for the user's answer. Do NOT proceed without it.**
+4. **Confirm the integration approach** — summarize what you will build and where, get user approval
+5. **Only then start writing code**
+
+**If you skip any of these steps, you WILL build the wrong thing.**
+
 ## How to Work
 
 ### Interaction Style
@@ -82,11 +106,29 @@ Handle partial failures: read `warnings`, use what succeeded, create failed reso
 
 **Hosted login URL:** Register `https://{authDomain}/hosted-login/` — REQUIRED, no automatic fallback.
 
-**First user:** Show defaults (admin@test.com / Admin@123), let user accept or change. Create with password → ACTIVE immediately.
+**First user:** Show defaults (admin@example.com / Admin@123), let user accept or change. Create with password → ACTIVE immediately.
+
+## App URL Registration — CRITICAL
+
+After provisioning, you MUST register these app URLs via MCP (`apptorID_add_app_urls`):
+
+| URL Type | What to register | When |
+|---|---|---|
+| `login` | If hosted login: `https://{realm-url}/hosted-login/`. If in-app login: your app's login URL | Always |
+| `redirect` | Your app's OAuth callback URL (e.g., `https://myapp.com/auth/callback`) | Always |
+| `logout` | Where to redirect after logout (e.g., `https://myapp.com/`) | Always |
+| `reset_password` | Your app's reset password page (e.g., `https://myapp.com/reset-password`). **NOT the auth server** — it doesn't have one. | If forgot-password is planned |
+| `post_reset_password` | Where to redirect after password reset (e.g., `https://myapp.com/login`) | If forgot-password is planned |
+
+**If you're using hosted login:** Register `https://{realm-url}/hosted-login/` as the `login` URL.
+**If you're using in-app login:** Register your app's login page URL as the `login` URL.
+
+**The hosted login does NOT provide a reset password page.** The app must build its own reset page and register its URL as `reset_password` type.
 
 ## Reference Files
 
-Read BEFORE writing any auth code:
+Read BEFORE writing any auth code. **Always read `apptorID-api-spec.md` first** — it has exact endpoint URLs, parameter names, and curl examples:
+- **API Spec (ALWAYS read first)** → `references/apptorID-api-spec.md`
 - Java/Spring → `references/java-spring.md`
 - Java/Micronaut → `references/java-micronaut.md`
 - Node/Express → `references/nodejs-express.md`
@@ -95,7 +137,7 @@ Read BEFORE writing any auth code:
 - Angular → `references/angular-frontend.md`
 - Multi-tenant → `references/multitenant-db.md`
 - Protocol → `references/oidc-knowledge.md`
-- Unlisted stack → read `oidc-knowledge.md`, build from protocol knowledge
+- Unlisted stack → read `apptorID-api-spec.md` + `oidc-knowledge.md`, build from protocol knowledge
 
 ## Key Details
 
@@ -138,6 +180,6 @@ Rate 1-10. Below 9 → fix and re-review.
 - Don't over-ask. Explore first.
 - MCP when available. List before creating.
 - After setup, offer next steps — suggest specific skills by name:
-  - "Want to add forgot password?" → `apptorID:forgot-password`
-  - "Want to manage users from your app?" → `apptorID:user-management`
+  - "Want to manage users (create, list, disable) from your app?" → `apptorID:user-management` (this also builds a set-password page for new users if one doesn't exist)
+  - "Want existing users to be able to reset a forgotten password from the login page?" → `apptorID:forgot-password`
   - "Need to configure email templates or manage apptorID resources?" → `apptorID:manage`

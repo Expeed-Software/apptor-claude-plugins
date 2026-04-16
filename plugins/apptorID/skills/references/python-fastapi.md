@@ -191,9 +191,24 @@ class ApptorOidcClient:
             response.raise_for_status()
             return response.json()
 
-    def build_logout_url(self, post_logout_redirect_uri: str) -> str:
+    async def revoke_refresh_token(self, refresh_token: str) -> None:
+        """Revoke a refresh token at the apptorID revocation endpoint."""
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{settings.realm_base_url}/oidc/revoke",
+                data={
+                    "refresh_token": refresh_token,
+                    "token_type_hint": "refresh_token",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+
+    def build_logout_url(self, post_logout_redirect_uri: str, id_token_hint: str | None = None) -> str:
         """Build the logout URL."""
-        return f"{self.end_session_endpoint}?post_logout_redirect_uri={post_logout_redirect_uri}"
+        url = f"{self.end_session_endpoint}?post_logout_redirect_uri={post_logout_redirect_uri}"
+        if id_token_hint:
+            url += f"&id_token_hint={id_token_hint}"
+        return url
 
 
 oidc_client = ApptorOidcClient()
@@ -258,12 +273,26 @@ async def login(request: Request) -> RedirectResponse:
 
 
 @auth_router.get("/callback")
-async def callback(request: Request, code: str, state: str) -> RedirectResponse:
+async def callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+) -> RedirectResponse:
     """Handles OAuth2 redirect. Receives ?code=xxx&state=xxx,
     validates state, exchanges code for tokens using client_id + client_secret
     (from env var APPTOR_CLIENT_SECRET), stores tokens in session,
     and redirects to dashboard.
     """
+    # 0. Check if apptorID returned an error
+    if error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"apptorID authorization error: {error}"
+            + (f" — {error_description}" if error_description else ""),
+        )
+
     # 1. Validate state (CSRF protection)
     saved_state = request.session.get("oauth_state")
     if not saved_state or saved_state != state:
@@ -307,9 +336,23 @@ async def refresh(request: Request) -> RedirectResponse:
 
 @auth_router.get("/logout")
 async def logout(request: Request) -> RedirectResponse:
-    """Clears session and redirects to apptorID logout."""
-    logout_url = oidc_client.build_logout_url(settings.post_logout_path)
+    """Revokes refresh token, clears session, and redirects to apptorID logout."""
+    # 1. Revoke the refresh token
+    refresh_token = request.session.get("refresh_token")
+    if refresh_token:
+        try:
+            await oidc_client.revoke_refresh_token(refresh_token)
+        except Exception:
+            pass  # Don't block logout if revocation fails
+
+    # 2. Build logout URL with id_token_hint before clearing session
+    id_token = request.session.get("id_token")
+    logout_url = oidc_client.build_logout_url(settings.post_logout_path, id_token)
+
+    # 3. Clear the local session
     request.session.clear()
+
+    # 4. Redirect to apptorID logout
     return RedirectResponse(url=logout_url)
 
 
@@ -592,6 +635,7 @@ settings = ApptorSettings()
 ```python
 import time
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -670,54 +714,39 @@ class ApptorAdminClient:
         """Create a user in a realm. user dict must include orgRefId."""
         return await self._admin_request("POST", f"/realms/{realm_id}/users", body=user)
 
-    async def list_users(
-        self,
-        realm_id: str,
-        page: int = 0,
-        size: int = 20,
-        search: str | None = None,
-    ) -> dict:
+    async def list_users(self, realm_id: str) -> dict:
         """List users in a realm."""
-        params: dict = {"page": page, "size": size}
-        if search:
-            params["search"] = search
-        return await self._admin_request("GET", f"/realms/{realm_id}/users", params=params)
+        return await self._admin_request("GET", f"/realms/{realm_id}/users")
 
-    async def get_user(self, realm_id: str, user_id: str) -> dict:
-        """Get a single user by user_id."""
-        return await self._admin_request("GET", f"/realms/{realm_id}/users/{user_id}")
+    # IMPORTANT: user_name (typically email) MUST be URL-encoded in paths.
+    # Emails like "mahesh.oa+1@expeed.com" contain + and @ which break URLs.
 
-    async def update_user(self, realm_id: str, user_id: str, updates: dict) -> dict:
+    async def get_user(self, realm_id: str, user_name: str) -> dict:
+        """Get a single user by user_name (email)."""
+        return await self._admin_request("GET", f"/realms/{realm_id}/users/by-username/{quote(user_name, safe='')}")
+
+    async def update_user(self, realm_id: str, user_name: str, updates: dict) -> dict:
         """Update user profile fields."""
-        return await self._admin_request("PUT", f"/realms/{realm_id}/users/{user_id}", body=updates)
+        return await self._admin_request("PUT", f"/realms/{realm_id}/users/{quote(user_name, safe='')}", body=updates)
 
-    async def disable_user(self, realm_id: str, user_id: str) -> None:
+    async def disable_user(self, realm_id: str, user_name: str) -> None:
         """Disable (deactivate) a user account."""
-        await self._admin_request("PATCH", f"/realms/{realm_id}/users/{user_id}/disable")
+        await self._admin_request("PUT", f"/realms/{realm_id}/users/{quote(user_name, safe='')}/disable")
 
-    async def enable_user(self, realm_id: str, user_id: str) -> None:
+    async def enable_user(self, realm_id: str, user_name: str) -> None:
         """Enable (reactivate) a user account."""
-        await self._admin_request("PATCH", f"/realms/{realm_id}/users/{user_id}/enable")
+        await self._admin_request("PUT", f"/realms/{realm_id}/users/{quote(user_name, safe='')}/enable")
 
-    async def delete_user(self, realm_id: str, user_id: str) -> None:
+    async def delete_user(self, realm_id: str, user_name: str) -> None:
         """Permanently delete a user."""
-        await self._admin_request("DELETE", f"/realms/{realm_id}/users/{user_id}")
+        await self._admin_request("DELETE", f"/realms/{realm_id}/users/{quote(user_name, safe='')}")
 
-    async def forgot_password(self, realm_id: str, email: str) -> dict:
-        """Trigger a forgot-password email for the user."""
+    async def forgot_password(self, app_client_id: str, user_name: str) -> dict:
+        """Trigger a forgot-password email. Requires app_client_id so the email contains the correct app URLs."""
         return await self._admin_request(
-            "POST", f"/realms/{realm_id}/users/forgot-password", body={"email": email}
+            "POST", f"/app-clients/{app_client_id}/users/{quote(user_name, safe='')}/forgot-password", body={}
         )
 
-    async def set_password(
-        self, realm_id: str, user_id: str, new_password: str, temporary: bool = False
-    ) -> None:
-        """Directly set a user's password (admin override)."""
-        await self._admin_request(
-            "POST",
-            f"/realms/{realm_id}/users/{user_id}/set-password",
-            body={"password": new_password, "temporary": temporary},
-        )
 
 
 admin_client = ApptorAdminClient()
@@ -726,7 +755,7 @@ admin_client = ApptorAdminClient()
 ### User Management FastAPI Routes
 
 ```python
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from typing import Any
 
 from admin_client import admin_client
@@ -739,62 +768,48 @@ user_mgmt_router = APIRouter(
 
 
 @user_mgmt_router.get("", dependencies=[Depends(require_roles("admin"))])
-async def list_users(
-    realm_id: str,
-    page: int = Query(0, ge=0),
-    size: int = Query(20, ge=1, le=100),
-    search: str | None = Query(None),
-) -> Any:
+async def list_users(realm_id: str) -> Any:
     """List users in a realm."""
-    return await admin_client.list_users(realm_id, page=page, size=size, search=search)
+    return await admin_client.list_users(realm_id)
 
 
 @user_mgmt_router.post("", status_code=201, dependencies=[Depends(require_roles("admin"))])
 async def create_user(realm_id: str, body: dict) -> Any:
-    """Create a new user. body must include 'email' and 'orgRefId'."""
-    if "email" not in body or "orgRefId" not in body:
-        raise HTTPException(status_code=400, detail="email and orgRefId are required")
+    """Create a new user. body must include 'firstName', 'email', and 'accountId'."""
+    if "firstName" not in body or "email" not in body or "accountId" not in body:
+        raise HTTPException(status_code=400, detail="firstName, email, and accountId are required")
     return await admin_client.create_user(realm_id, body)
 
 
-@user_mgmt_router.get("/{user_id}", dependencies=[Depends(require_roles("admin"))])
-async def get_user(realm_id: str, user_id: str) -> Any:
-    """Get a single user."""
-    return await admin_client.get_user(realm_id, user_id)
+@user_mgmt_router.get("/{user_name}", dependencies=[Depends(require_roles("admin"))])
+async def get_user(realm_id: str, user_name: str) -> Any:
+    """Get a single user by userName (email)."""
+    return await admin_client.get_user(realm_id, user_name)
 
 
-@user_mgmt_router.put("/{user_id}", dependencies=[Depends(require_roles("admin"))])
-async def update_user(realm_id: str, user_id: str, body: dict) -> Any:
+@user_mgmt_router.put("/{user_name}", dependencies=[Depends(require_roles("admin"))])
+async def update_user(realm_id: str, user_name: str, body: dict) -> Any:
     """Update a user's profile fields."""
-    return await admin_client.update_user(realm_id, user_id, body)
+    return await admin_client.update_user(realm_id, user_name, body)
 
 
-@user_mgmt_router.patch("/{user_id}/disable", status_code=204, dependencies=[Depends(require_roles("admin"))])
-async def disable_user(realm_id: str, user_id: str) -> None:
+@user_mgmt_router.put("/{user_name}/disable", status_code=204, dependencies=[Depends(require_roles("admin"))])
+async def disable_user(realm_id: str, user_name: str) -> None:
     """Disable a user account."""
-    await admin_client.disable_user(realm_id, user_id)
+    await admin_client.disable_user(realm_id, user_name)
 
 
-@user_mgmt_router.patch("/{user_id}/enable", status_code=204, dependencies=[Depends(require_roles("admin"))])
-async def enable_user(realm_id: str, user_id: str) -> None:
+@user_mgmt_router.put("/{user_name}/enable", status_code=204, dependencies=[Depends(require_roles("admin"))])
+async def enable_user(realm_id: str, user_name: str) -> None:
     """Enable a user account."""
-    await admin_client.enable_user(realm_id, user_id)
+    await admin_client.enable_user(realm_id, user_name)
 
 
-@user_mgmt_router.delete("/{user_id}", status_code=204, dependencies=[Depends(require_roles("admin"))])
-async def delete_user(realm_id: str, user_id: str) -> None:
+@user_mgmt_router.delete("/{user_name}", status_code=204, dependencies=[Depends(require_roles("admin"))])
+async def delete_user(realm_id: str, user_name: str) -> None:
     """Permanently delete a user."""
-    await admin_client.delete_user(realm_id, user_id)
+    await admin_client.delete_user(realm_id, user_name)
 
-
-@user_mgmt_router.post("/{user_id}/set-password", status_code=204, dependencies=[Depends(require_roles("admin"))])
-async def set_password(realm_id: str, user_id: str, body: dict) -> None:
-    """Admin password override for a user."""
-    password = body.get("password")
-    if not password:
-        raise HTTPException(status_code=400, detail="password is required")
-    temporary = bool(body.get("temporary", False))
-    await admin_client.set_password(realm_id, user_id, password, temporary)
 
 # Register in main.py:
 # app.include_router(user_mgmt_router)
