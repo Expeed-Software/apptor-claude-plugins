@@ -16,10 +16,10 @@ Integrate [apptorID](https://apptor.io) (OAuth2/OIDC) authentication into any ap
 ```bash
 # From the apptor marketplace:
 claude plugin marketplace add https://github.com/expeedsoftware/apptor-claude-plugins
-claude plugin add apptorID
+claude plugin install apptorID
 
 # Or directly:
-claude plugin add https://github.com/expeedsoftware/apptor-claude-plugins/plugins/apptorID
+claude plugin install https://github.com/expeedsoftware/apptor-claude-plugins/plugins/apptorID
 ```
 
 ## Configure

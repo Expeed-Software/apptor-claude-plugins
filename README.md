@@ -15,7 +15,7 @@ Claude Code plugins for the [apptor](https://apptor.io) ecosystem.
 claude plugin marketplace add https://github.com/expeedsoftware/apptor-claude-plugins
 
 # Install a plugin:
-claude plugin add apptorID
+claude plugin install apptorID
 ```
 
 ## Configuration
