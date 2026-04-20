@@ -1,0 +1,32 @@
+{
+  "name": "expeed-review-protocol",
+  "description": "Mandatory three-tier review gate for Expeed repos. Blocks 'done' and 'git push' until the tier-appropriate checklist (L1 code review, smoke test, cross-layer contract check, adversarial review, runbook/rollback) is filled with real evidence. Catches the 'reviewed per-layer, never booted' failure mode.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Expeed Software",
+    "email": "support@expeed.com"
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/verify-review.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/block-unverified-push.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

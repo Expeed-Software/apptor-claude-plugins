@@ -7,6 +7,7 @@ Claude Code plugins for the [apptor](https://apptor.io) ecosystem.
 | Plugin | Description |
 |--------|-------------|
 | [apptorID](plugins/apptorID/) | Integrate apptorID (OAuth2/OIDC) authentication into any application |
+| [expeed-review-protocol](plugins/expeed-review-protocol/) | Mandatory three-tier review gate — blocks "done" and `git push` until the tier-appropriate checklist (L1, smoke test, cross-layer contract check, adversarial review, Tier 3 runbook/rollback) is filled with real evidence |
 
 ## Install
 

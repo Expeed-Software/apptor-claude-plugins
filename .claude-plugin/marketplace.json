@@ -12,6 +12,12 @@
       "description": "Integrate apptorID (OAuth2/OIDC) authentication into any application. Explores your codebase, provisions resources via MCP, writes all integration code, and tests it.",
       "source": "./plugins/apptorID",
       "category": "development"
+    },
+    {
+      "name": "expeed-review-protocol",
+      "description": "Mandatory three-tier review gate for Expeed repos. Blocks 'done' and 'git push' until the tier-appropriate checklist (L1 code review, smoke test, cross-layer contract check, adversarial review, Tier 3 runbook/rollback) is filled with real evidence. Catches the 'reviewed per-layer, never booted' failure mode.",
+      "source": "./plugins/expeed-review-protocol",
+      "category": "development-workflow"
     }
   ]
 }
