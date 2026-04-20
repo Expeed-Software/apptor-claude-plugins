@@ -17,6 +17,7 @@ This protocol encodes those lessons. Every change, regardless of size, needs an 
 
 | Blast radius | Tier | Required gates |
 |---|---|---|
+| Docs-only, typo-only, comment-only (no runtime code modified) | 0 | L1 code review only |
 | <5 files, single module, no UI/API/DB change, internal-only | 1 | L1 + smoke test + checklist |
 | User-facing OR cross-module OR new/changed API OR new event type OR new public config | 2 | Tier 1 + cross-layer contract check + adversarial review |
 | Data migration OR feature-flag cutover OR production deploy OR auth/tenant/secrets/crypto change | 3 | Tier 2 + runbook + rollback test + staging dry-run |

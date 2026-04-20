@@ -5,8 +5,16 @@
 # complete / ready / approved, verify `.claude/reviews/<branch>.md` exists and
 # has the tier-required sections filled with real evidence. Exit 2 blocks.
 #
+# Stop hook stdin schema (authoritative):
+#   { "session_id": "...", "transcript_path": "<path>", "cwd": "...",
+#     "permission_mode": "...", "hook_event_name": "Stop" }
+# The message content is NOT in the payload. To get the last assistant message,
+# tail the JSONL transcript at `transcript_path` and extract text from the last
+# line whose role/type is "assistant".
+#
 # Exit codes:
-#   0  — allow (checklist complete, or not a done-claim, or on a protected branch)
+#   0  — allow (checklist complete, or not a done-claim, or on a protected branch,
+#              or any infrastructure parse failure — we never block on infra)
 #   2  — block with stderr message
 #
 # Bypass:
@@ -21,57 +29,82 @@ if [[ "${EXPEED_REVIEW_SKIP:-0}" == "1" ]]; then
 fi
 
 # ---------- read hook input ----------
-# Claude Code passes hook input as JSON on stdin. We want the last assistant
-# message text if available. Be resilient: if we can't parse, fall through
-# to allow rather than block on infrastructure issues.
 HOOK_INPUT=""
 if [[ -p /dev/stdin || ! -t 0 ]]; then
   HOOK_INPUT="$(cat 2>/dev/null || true)"
 fi
 
-# Extract the last assistant message text. The exact schema varies across
-# Claude Code versions; try common paths. If nothing parses, we use the
-# raw input as a fallback for the grep.
-LAST_MSG=""
-if command -v python3 >/dev/null 2>&1; then
-  LAST_MSG="$(printf '%s' "$HOOK_INPUT" | python3 -c '
-import json, sys
+# ---------- extract transcript_path ----------
+# Prefer jq; fall back to python3; fall back to silent-allow (we never block on
+# infrastructure failure — that would brick the session).
+TRANSCRIPT_PATH=""
+if command -v jq >/dev/null 2>&1; then
+  TRANSCRIPT_PATH="$(printf '%s' "$HOOK_INPUT" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+elif command -v python3 >/dev/null 2>&1; then
+  TRANSCRIPT_PATH="$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys
 try:
-    d = json.load(sys.stdin)
+    d=json.load(sys.stdin)
+    print(d.get("transcript_path",""))
 except Exception:
-    sys.exit(0)
-# Try a few known shapes.
-def pluck(obj, keys):
-    for k in keys:
-        if isinstance(obj, dict) and k in obj:
-            return obj[k]
-    return None
-msg = pluck(d, ["last_assistant_message", "lastMessage", "message"])
-if isinstance(msg, dict):
-    msg = pluck(msg, ["text", "content"])
-if isinstance(msg, list):
-    # content blocks
-    texts = [b.get("text","") for b in msg if isinstance(b, dict)]
-    msg = " ".join(texts)
-if isinstance(msg, str):
-    print(msg)
-' 2>/dev/null || true)"
-fi
-if [[ -z "$LAST_MSG" ]]; then
-  LAST_MSG="$HOOK_INPUT"
+    pass' 2>/dev/null || true)"
 fi
 
+# No transcript or no parser — silent allow.
+if [[ -z "$TRANSCRIPT_PATH" ]] || [[ ! -f "$TRANSCRIPT_PATH" ]]; then
+  exit 0
+fi
+
+# ---------- extract last assistant message text from JSONL ----------
+# Each line is an event. Look for the most recent line with type/role "assistant"
+# and pull text out of .message.content (array of blocks with .text) or .content.
+LAST_MSG=""
+if command -v jq >/dev/null 2>&1; then
+  LAST_MSG="$(tail -n 200 "$TRANSCRIPT_PATH" 2>/dev/null \
+    | jq -rs '
+        [ .[] | select((.type // .role // "") == "assistant") ] | last // empty
+        | (.message.content // .content // [])
+        | if type=="string" then .
+          elif type=="array" then (map(select(.type=="text") | .text) | join(" "))
+          else "" end
+      ' 2>/dev/null || true)"
+elif command -v python3 >/dev/null 2>&1; then
+  LAST_MSG="$(tail -n 200 "$TRANSCRIPT_PATH" 2>/dev/null | python3 -c '
+import json, sys
+last = None
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    try: d=json.loads(line)
+    except Exception: continue
+    if (d.get("type") or d.get("role") or "") == "assistant":
+        last = d
+if not last:
+    sys.exit(0)
+msg = last.get("message", last)
+content = msg.get("content") if isinstance(msg, dict) else None
+if isinstance(content, str):
+    print(content)
+elif isinstance(content, list):
+    parts=[b.get("text","") for b in content if isinstance(b,dict) and b.get("type")=="text"]
+    print(" ".join(parts))
+' 2>/dev/null || true)"
+fi
+
+# If we still have nothing, silent allow.
+if [[ -z "$LAST_MSG" ]]; then exit 0; fi
+
 # ---------- done-claim detection ----------
-# Only engage if the assistant's message looks like a completion claim. We want
-# to avoid false-positive blocks on mid-work stops.
-if ! printf '%s' "$LAST_MSG" | grep -Eiq '(\b(done|complete(d)?|ready|shipped|approved|finished|all set|good to go|merge[- ]ready|ready to ship|ready to merge|ready for review)\b)'; then
+# Narrow set of phrases that strongly indicate a completion assertion. False
+# negatives are tolerable — the PreToolUse hook on git push catches the skip.
+# False positives (blocking mid-work Stops) are NOT tolerable.
+DONE_PHRASES='\b(all done|work is (now )?(complete|done|ready)|feature is (ready|complete|shipped)|implementation is complete|ready to merge|ready to ship|ready to push|safe to merge|safe to ship|good to merge|good to ship|marking (this|it) (done|complete)|task complete|phase complete|plan complete|APPROVED for merge|ready to deploy)\b'
+if ! printf '%s' "$LAST_MSG" | grep -Eiq "$DONE_PHRASES"; then
   exit 0
 fi
 
 # ---------- branch check ----------
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 if [[ -z "$REPO_ROOT" ]]; then
-  # Not in a git repo — nothing to gate.
   exit 0
 fi
 cd "$REPO_ROOT" || exit 0
@@ -79,7 +112,6 @@ cd "$REPO_ROOT" || exit 0
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 case "$BRANCH" in
   main|master|dev|develop|HEAD|"")
-    # Protected / exploratory branches — do not gate.
     exit 0
     ;;
 esac
@@ -108,11 +140,11 @@ fi
 
 # Parse tier.
 TIER="$(grep -E '^\*\*Tier:\*\*' "$CHECKLIST" | head -1 | sed -E 's/.*Tier:\*\*[[:space:]]*([0-9]).*/\1/')"
-if [[ ! "$TIER" =~ ^[123]$ ]]; then
+if [[ ! "$TIER" =~ ^[0123]$ ]]; then
   cat >&2 <<EOF
 expeed-review-protocol: BLOCKED
 
-Checklist at $CHECKLIST does not declare a tier (Tier: 1, 2, or 3).
+Checklist at $CHECKLIST does not declare a tier (Tier: 0, 1, 2, or 3).
 Open the file and set the tier, or re-run /review-init.
 EOF
   exit 2
@@ -138,15 +170,19 @@ EOF
   exit 2
 fi
 
-# Smoke test evidence check — this is the gate that actually matters.
-# Look for literal placeholders that mean the section was never filled.
-if grep -Eq '<paste output / screenshot link>|<exact command>|<exact steps>|<description>' "$CHECKLIST"; then
+# Placeholder detection — centralized. If the checklist still has any of these
+# unfilled template markers, block. `YYYY-MM-DD` is checked as a whole-line
+# literal because that's the raw template default; once filled with a real date
+# the line will differ.
+PLACEHOLDER_RE='<(paste output / screenshot link|exact command|exact steps|description|Claude-session-or-human-reviewer|path to committed runbook\.md|log excerpt or link|paste|file:line — problem[^>]*|category \+ file:line[^>]*|list[^>]*|N files changed[^>]*|Critical / Important / Minor[^>]*)>'
+if grep -Eq "$PLACEHOLDER_RE" "$CHECKLIST" || grep -qE '^Date:[[:space:]]*YYYY-MM-DD[[:space:]]*$' "$CHECKLIST"; then
   cat >&2 <<EOF
 expeed-review-protocol: BLOCKED
 
 Checklist at $CHECKLIST still contains placeholder text from the template.
-Real evidence is required — the smoke test section must have the actual
-boot command, user action, and observed output.
+Real evidence is required — fill in the actual commands, outputs, dates, and
+findings. The smoke test section in particular must have real boot command,
+user action, and observed output.
 
 Next step:
   Run /smoke-test to capture real evidence, then /review-complete.

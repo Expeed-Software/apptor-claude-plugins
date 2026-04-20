@@ -1,6 +1,6 @@
 # Review Checklist — <branch-name>
 
-**Tier:** [1 | 2 | 3]
+**Tier:** [0 | 1 | 2 | 3]
 **Tier rationale:** <one sentence>
 **Blast radius:** <N files changed, M modules touched, user-facing yes/no>
 **Started:** YYYY-MM-DD

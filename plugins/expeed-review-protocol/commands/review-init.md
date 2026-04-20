@@ -21,6 +21,7 @@ Also check if `.claude/expeed-review-protocol.local.md` exists in the repo. If y
 
 Use these rules mechanically first, then ask the user to confirm:
 
+- If the ONLY changed files match `*.md`, `*.txt`, or live under doc-only directories (`docs/`, `README*`), AND no file contains non-comment code changes → Tier 0.
 - If any file under a `migrations/`, `liquibase/`, `db/changelog/` path → Tier 3.
 - Else if any file touches auth, tenancy, secrets, crypto (search paths for `auth`, `tenant`, `secret`, `crypto`, `jwt`, `apikey`) → Tier 3.
 - Else if any file under a `deployment/`, `k8s/`, `docker/`, `helm/` path AND flag/prod-related → Tier 3.
@@ -37,12 +38,18 @@ Show the proposed tier, the rule that triggered it, and the `git diff --stat` ou
 Copy the template from `${CLAUDE_PLUGIN_ROOT}/templates/review-checklist.md` to `.claude/reviews/<branch-name>.md`. Substitute:
 
 - `<branch-name>` → actual branch.
-- `[1 | 2 | 3]` → the confirmed tier.
+- `[0 | 1 | 2 | 3]` → the confirmed tier.
 - Tier rationale line → the user's confirmed rationale.
 - Blast radius line → "N files changed, M modules touched, user-facing: yes/no" from the diff analysis.
 - Started date → today's date.
 
-Create `.claude/reviews/` if it does not exist.
+Create the parent directory chain first (branches like `feature/output-redesign` require nested directories):
+
+```bash
+mkdir -p "$(dirname .claude/reviews/<branch-name>.md)"
+```
+
+This also creates `.claude/reviews/` if it does not exist.
 
 ## Step 4 — Commit the skeleton
 

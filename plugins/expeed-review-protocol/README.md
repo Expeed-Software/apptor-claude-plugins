@@ -4,6 +4,15 @@ A Claude Code plugin that installs a mandatory three-tier review gate into any E
 
 ## Install
 
+Inside Claude Code (recommended — slash commands):
+
+```
+/plugin marketplace add https://github.com/expeedsoftware/apptor-claude-plugins
+/plugin install expeed-review-protocol
+```
+
+Or from the shell via the Claude Code CLI:
+
 ```bash
 claude plugin marketplace add https://github.com/expeedsoftware/apptor-claude-plugins
 claude plugin install expeed-review-protocol
@@ -18,6 +27,7 @@ chmod +x "$(claude plugin path expeed-review-protocol)"/hooks/*.sh
 
 | Tier | Trigger | Required steps |
 |------|---------|----------------|
+| 0 | Docs-only / typo-only / comment-only (no runtime code modified) | L1 code review only |
 | 1 | <5 files, single module, no UI/API/DB change | L1 code review + smoke test |
 | 2 | User-facing OR cross-module OR API/event change | Tier 1 + cross-layer contract check + adversarial review |
 | 3 | Data migration, flag cutover, prod deploy, auth/tenant/secrets | Tier 2 + runbook + rollback test + staging dry-run |
@@ -80,3 +90,6 @@ Verify `chmod +x` on the `hooks/*.sh` files. On Windows, confirm Git Bash is the
 
 **How do I know which tier applies?**
 `/review-init` proposes a tier based on `git diff --stat` and your description. You can override — the rationale is stored in the checklist.
+
+**I'm on a nested branch (e.g. `feature/my-thing`) and the checklist write failed.**
+`/review-init` now runs `mkdir -p` on the parent directory before writing. If you created the checklist manually on a nested branch, make sure `.claude/reviews/feature/` (or equivalent) exists first.

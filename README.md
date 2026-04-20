@@ -11,11 +11,17 @@ Claude Code plugins for the [apptor](https://apptor.io) ecosystem.
 
 ## Install
 
-```bash
-# Add the apptor marketplace:
-claude plugin marketplace add https://github.com/expeedsoftware/apptor-claude-plugins
+Inside Claude Code (recommended — slash commands):
 
-# Install a plugin:
+```
+/plugin marketplace add https://github.com/expeedsoftware/apptor-claude-plugins
+/plugin install apptorID
+```
+
+Or from the shell via the Claude Code CLI:
+
+```bash
+claude plugin marketplace add https://github.com/expeedsoftware/apptor-claude-plugins
 claude plugin install apptorID
 ```
 

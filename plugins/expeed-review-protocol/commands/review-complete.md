@@ -11,9 +11,13 @@ You are the terminal gate. Nothing ships unless every tier-required section of `
 
 Open `.claude/reviews/<current-branch>.md`. If absent, refuse — tell the user to run `/review-init`.
 
-Parse the Tier field. If missing or not `1`, `2`, or `3`, refuse — the tier must be explicit.
+Parse the Tier field. If missing or not `0`, `1`, `2`, or `3`, refuse — the tier must be explicit.
 
 ## Step 2 — Check required sections for the tier
+
+### Tier 0 required
+- L1 code review: "Dispatched" ticked, findings listed (or "no findings" stated), resolution for each Critical/Important.
+- Smoke test / cross-layer / adversarial / runbook sections marked `N/A - Tier 0` (or left with their defaults) are acceptable — Tier 0 only requires L1.
 
 ### Tier 1 required
 - L1 code review: "Dispatched" ticked, findings listed (or "no findings" stated), resolution for each Critical/Important.

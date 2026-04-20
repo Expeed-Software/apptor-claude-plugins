@@ -8,6 +8,7 @@ Before claiming "done", "complete", "ready", "approved", or before `git push` / 
 ## Tier decision — at PLAN START, not at done-claim
 Decide tier the moment the plan is written. Record it in the checklist. Do not downgrade mid-flight.
 
+- Tier 0: docs-only / typo-only / comment-only changes (no runtime code touched) → L1 only. No smoke test required.
 - Tier 1: <5 files, single module, no UI change, no API change, no DB migration → L1 + smoke test.
 - Tier 2: user-facing change OR cross-module OR new/changed API OR new event type → Tier 1 + cross-layer contract check + adversarial review.
 - Tier 3: data migration, flag cutover, production deploy, auth/tenant/secrets change → Tier 2 + runbook + rollback test + staging dry-run.
