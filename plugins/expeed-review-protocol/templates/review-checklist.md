@@ -11,6 +11,7 @@
   - Critical: <file:line — problem, or "none">
   - Important: <file:line — problem, or "none">
   - Minor: <file:line — problem, or "none">
+- [ ] Test-contract fidelity check (no test-lies — every `*IntegrationTest` / `*FanOutTest` / `*ContractTest` / `*EndToEndTest` / concurrency-test exercises the real contract, not a mock of the boundary it claims to verify)
 - Resolution: <fixed / deferred with reason per finding>
 
 ## Smoke test (all tiers) — EVIDENCE REQUIRED
