@@ -18,6 +18,12 @@
       "description": "Mandatory three-tier review gate for Expeed repos. Blocks 'done' and 'git push' until the tier-appropriate checklist (L1 code review, smoke test, cross-layer contract check, adversarial review, Tier 3 runbook/rollback) is filled with real evidence. Catches the 'reviewed per-layer, never booted' failure mode.",
       "source": "./plugins/expeed-review-protocol",
       "category": "development-workflow"
+    },
+    {
+      "name": "observekit",
+      "description": "Integrate OpenTelemetry with ObserveKit (Expeed's observability platform) into any application. Detects the framework, writes idiomatic SDK config + dependency + launch flag, wires the API key safely per environment (K8s Secret / Vault / AWS-Azure-GCP Secrets Manager / .NET user-secrets / gitignored local file), and verifies traces/metrics/logs are flowing. Per-app, direct push, no Collector. Supports Java/Spring/Micronaut/Quarkus, Node/Express/NestJS/Fastify, Python/Django/Flask/FastAPI, .NET, Go, Ruby, PHP, Rust.",
+      "source": "./plugins/observekit",
+      "category": "observability"
     }
   ]
 }

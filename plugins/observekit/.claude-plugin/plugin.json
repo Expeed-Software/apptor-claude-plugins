@@ -1,0 +1,13 @@
+{
+  "name": "observekit",
+  "description": "Integrate OpenTelemetry with ObserveKit (Expeed's observability platform) in any application. Detects the framework, writes idiomatic SDK config and dependencies, wires the API key safely per environment, and verifies data is flowing — across Java/Spring/Micronaut/Quarkus, Node/Express/NestJS/Fastify, Python/Django/Flask/FastAPI, .NET, Go, Ruby, PHP, and Rust.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Expeed Software",
+    "email": "support@expeed.com"
+  },
+  "homepage": "https://observekit.expeed.com",
+  "repository": "https://github.com/expeedsoftware/apptor-claude-plugins",
+  "license": "Proprietary",
+  "keywords": ["observability", "opentelemetry", "otel", "tracing", "metrics", "logs", "instrumentation", "observekit"]
+}
