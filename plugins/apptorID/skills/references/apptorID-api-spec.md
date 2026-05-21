@@ -408,7 +408,7 @@ The hosted login is a React SPA. The login URL to register is `https://{realm-ur
 
 **Available pages in hosted login:** Login page only. The hosted login does NOT provide pages for reset-password, signup, or profile management. The app must build these.
 
-### Pre-Authorize (client-hosted login)
+### Pre-Authorize (client-hosted login — LOCAL username/password ONLY)
 
 ```
 POST /oidc/pre-authorize
@@ -420,6 +420,8 @@ username={string}&password={string}
 Query params: `client_id`, `redirect_uri`, `scope`, `response_type=code`, `state`, `nonce`, `code_challenge`, `code_challenge_method`
 
 Returns a `preAuthToken` that can be passed to `/oidc/auth?preAuthToken={token}` to skip the login page.
+
+> **`pre-authorize` is for the LOCAL identity provider only.** For Microsoft / Google / other IdP-based logins, do NOT call `pre-authorize`. Instead, redirect the user's browser directly to `GET /oidc/auth?...&provider_id={microsoft|google}` and let apptorID hand off to the upstream IdP. Trying to "pre-authorize" a social login will not work — there are no local credentials to validate.
 
 ### Logout
 
@@ -448,6 +450,54 @@ GET /oidc/jwks
 GET /oidc/userinfo
 Authorization: Bearer {access-token}
 ```
+
+---
+
+## Identity Provider (IdP) Configuration
+
+apptorID currently supports three identity providers per app client: `local` (username/password), `microsoft` (Azure AD / Entra ID), and `google`. Configure via MCP `apptorID_add_idp_connection` (see `skills/manage/SKILL.md` for the full field-by-field guide) — these are the protocol-level details:
+
+### Provider-specific required fields
+
+| `providerId` | Mandatory fields | Notes |
+|---|---|---|
+| `local` | _(none beyond `clientId` + `providerId`)_ | Built-in username/password |
+| `microsoft` | `externalClientId`, `externalClientSecret` | Pass `tenantId` to single-tenant; defaults to `common` (multi-tenant) when omitted |
+| `google` | `externalClientId`, `externalClientSecret` | |
+
+The MCP tool `apptorID_add_idp_connection` rejects the call with `IllegalArgumentException` if a required field is missing for `microsoft` or `google`. For Microsoft, the server builds `issuerUrl` / `metadataUrl` from the supplied `tenantId` (or `common` if omitted), so there is no `{tenantid}`-style placeholder in the stored value. The tool's response includes the resolved `issuerUrl` and `metadataUrl`.
+
+### Redirect URI to register in Azure / Google
+
+apptorID does NOT return this URI in any tool response. For each IdP you configure, register this URI in the upstream provider's app/registration:
+
+```
+https://{realm-auth-domain}/oidc/callback/{providerId}
+```
+
+Examples:
+- Microsoft (Azure portal → App registrations → Authentication → Web → Redirect URIs): `https://acme-x1y2.sandbox.auth.apptor.io/oidc/callback/microsoft`
+- Google (Cloud Console → Credentials → OAuth 2.0 Client → Authorized redirect URIs): `https://acme-x1y2.sandbox.auth.apptor.io/oidc/callback/google`
+
+### Starting an IdP login flow
+
+To initiate Microsoft/Google login (rather than local password), redirect the browser to:
+
+```
+GET /oidc/auth?response_type=code
+              &client_id={uuid}
+              &redirect_uri={app-callback}
+              &scope=openid email profile
+              &state={random}
+              &nonce={random}
+              &code_challenge={challenge}
+              &code_challenge_method=S256
+              &provider_id={microsoft|google}
+```
+
+apptorID will redirect the user to the upstream IdP. After successful upstream auth, the user lands back at apptorID's `/oidc/callback/{providerId}`, then is redirected to your app's `redirect_uri` with `?code=...&state=...`.
+
+When the upstream IdP rejects the request, apptorID now 302s the browser back to the original OAuth2 `redirect_uri` with `?error=...&error_description=...&state=...` per RFC 6749 §4.1.2.1. Your callback page should check for `?error=` before attempting code exchange — same pattern you'd use for any standards-compliant OAuth2 provider. If `redirect_uri` cannot be recovered (unknown state), apptorID falls back to HTTP 500.
 
 ---
 
@@ -484,3 +534,6 @@ Custom claims from orgRefId/userRefId:
 5. **ALWAYS use the created realm URL** for integration code, not the master URL.
 6. **ALWAYS register app URLs** (`reset_password`, `post_reset_password`, `redirect`, `login`, `logout`) before the flows that need them.
 7. **User endpoints use `{userName}` in the path**, not a UUID. userName is typically the email.
+8. **`apptorID_add_idp_connection` enforces required fields for microsoft/google** — the call fails if `externalClientId` / `externalClientSecret` are missing. For Microsoft, pass `tenantId` so the issuer/metadata URLs are scoped to your tenant (defaults to `common` multi-tenant otherwise). Verify the response's resolved `issuerUrl` / `metadataUrl`.
+9. **NEVER use `pre-authorize` for Microsoft/Google login.** It is local-username/password only. For IdP logins, redirect directly to `/oidc/auth?...&provider_id={microsoft|google}`.
+10. **ALWAYS register the IdP redirect URI in Azure / Google** before testing the flow: `https://{realm-auth-domain}/oidc/callback/{providerId}`. apptorID does not surface this URI in any tool response.

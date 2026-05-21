@@ -192,6 +192,52 @@ Tool: apptorID_forgot_password
 4. apptorID_assign_role_to_user (realmId, userName: "user@company.com", resourceServerId, roleIds: "{roleId}")
 ```
 
+### Add Identity Provider (Social Login: Microsoft, Google)
+
+```
+Tool: apptorID_add_idp_connection
+  clientId: "{from list_app_clients}"
+  providerId: "microsoft"   (or "google", "local")
+  ...provider-specific fields below...
+```
+
+**The server now rejects microsoft/google connections that omit `externalClientId` or `externalClientSecret`** — the call fails with `IllegalArgumentException` instead of silently succeeding. You still must pass the right fields:
+
+**For `providerId: "microsoft"`:**
+
+| Field | Required? | Notes |
+|---|---|---|
+| `externalClientId` | **MANDATORY** | The Application (client) ID from your Azure app registration |
+| `externalClientSecret` | **MANDATORY** | The client secret value from Azure (not the secret ID) |
+| `tenantId` | recommended | The Azure tenant UUID. The server substitutes it into the issuer/metadata URLs. Omit only if you genuinely want the multi-tenant `common` endpoint. |
+| `issuerUrl` | optional | Auto-filled to `https://login.microsoftonline.com/{tenantId or 'common'}/v2.0`. Pass explicitly only to override. |
+| `metadataUrl` | optional | Auto-filled to the matching `/.well-known/openid-configuration`. |
+
+The response now includes the resolved `issuerUrl` and `metadataUrl` — verify they contain the expected tenant UUID before proceeding.
+
+**For `providerId: "google"`:**
+
+| Field | Required? | Notes |
+|---|---|---|
+| `externalClientId` | **MANDATORY** | OAuth 2.0 Client ID from Google Cloud Console |
+| `externalClientSecret` | **MANDATORY** | OAuth 2.0 Client Secret |
+
+**For `providerId: "local"`:** No external fields. Just `clientId` + `providerId: "local"`.
+
+**Redirect URI to register in Azure / Google:**
+
+This URI must be added to your Azure app registration ("Web → Redirect URIs") or Google OAuth client ("Authorized redirect URIs") BEFORE the social login flow will work. apptorID does NOT return this URI in the `add_idp_connection` response. Use:
+
+```
+https://{realm-auth-domain}/oidc/callback/{providerId}
+```
+
+Example: `https://acme-x1y2.sandbox.auth.apptor.io/oidc/callback/microsoft`
+
+Verify by calling `apptorID_get_idp_connections` after creation and confirm the connection has the external fields populated.
+
+**Verifying the IdP works:** Start a login from your app with `prompt=login` (or via the hosted login). The redirect should land on Microsoft/Google. If the upstream IdP rejects the request, the server now 302s back to your original OAuth2 `redirect_uri` with `?error=...&error_description=...&state=...` (per RFC 6749 §4.1.2.1) — read those params on your callback page to surface the failure.
+
 ### Create Access Keys
 
 ```

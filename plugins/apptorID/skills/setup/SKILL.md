@@ -31,6 +31,11 @@ Before writing ANY integration code, read `references/apptorID-api-spec.md`. Thi
 
 **You MUST complete ALL of these steps before writing ANY code. No exceptions.**
 
+0. **CONFIRM THE ACCOUNT BEFORE CREATING ANYTHING.** The access key in `.mcp.json` / settings is bound to ONE account. If it's the wrong account, every realm, app client, user, and IdP you create will pollute the wrong tenant — and there is no rollback.
+   - Call `apptorID_whoami`. It returns `accountId`, `accountName`, `userId`, `userName`, `roles`, and a summary of the realms in scope.
+   - Show the user: **"Your access key is bound to account `<accountName>` (id `<accountId>`), user `<userName>`, with realms: [list]. Is this the right account?"** Wait for explicit yes.
+   - If the response includes no `accountName` or `whoami` fails with an auth error: STOP. The credentials are invalid, expired, or insufficient. Do not proceed.
+   - **Do NOT use `apptorID_test_connection` here** — it takes a `realmAuthDomain`, not an access key, so it cannot verify which account you're in.
 1. **Scan the codebase** — use Glob, Grep, Read to find:
    - Existing login pages, auth pages, or auth-related components
    - Existing auth middleware, guards, interceptors
@@ -39,7 +44,7 @@ Before writing ANY integration code, read `references/apptorID-api-spec.md`. Thi
 2. **Present findings to the user** — "I found these existing pages/components: [list]. I found this existing auth setup: [details]."
 3. **Ask about login page preference** — "Do you want:
    (A) **Hosted login** — redirect to apptorID's hosted login page (no login UI in your app)
-   (B) **In-app login page** — build a login form in your app that calls apptorID's pre-authorize endpoint
+   (B) **In-app login page** — build a login form in your app that calls apptorID's pre-authorize endpoint (LOCAL username/password only — IdP flows do NOT use pre-authorize)
    (C) **Use your existing login page** — I found [page] in your repo, integrate apptorID into it"
    **Wait for the user's answer. Do NOT proceed without it.**
 4. **Confirm the integration approach** — summarize what you will build and where, get user approval
@@ -96,7 +101,7 @@ Detection: if project has a backend → client_secret pattern. Pure SPA → PKCE
 Check if `apptorID_full_setup` tool exists → MCP mode. Otherwise → credentials from user or placeholders.
 
 **Decision tree:**
-- User has credentials → use directly, verify with `apptorID_test_connection`
+- User has credentials → use directly, verify by calling `apptorID_whoami` (probes both that the access key is valid AND which account it's bound to — see HARD GATE step 0). Do NOT use `apptorID_test_connection` for credential verification; it requires a `realmAuthDomain` and only checks that a realm host responds, not whose account it belongs to.
 - User lost client_secret → `apptorID_reset_client_secret`
 - User has realm, no app client → create client + URLs + IdPs
 - User unsure what exists → list realms, show options, let user pick or create
