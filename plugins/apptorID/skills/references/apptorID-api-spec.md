@@ -1,6 +1,6 @@
 # apptorID API Specification
 
-> **This is the SINGLE SOURCE OF TRUTH for all apptorID API calls.** Every skill MUST read this file before writing any integration code. Do NOT guess parameter names, endpoint paths, or URL patterns. If it's not in this file, check the OpenAPI spec at `/swagger-ui/` on the auth server.
+> **The live OpenAPI spec is the source of truth — this file is a curated quick reference.** Before writing integration code, fetch `https://{realm-authDomain}/swagger/apptor-auth-server-0.5.yml` (or browse `/swagger-ui/`). This file covers the endpoints the plugin uses most, verified against the server source — but when the two disagree, **the live spec wins** and you should flag the drift. Do NOT guess parameter names, endpoint paths, or URL patterns; fetch, then read.
 
 ## OpenAPI / Swagger
 
@@ -96,14 +96,16 @@ These endpoints resolve the realm from the Host header. The realm determines whi
 | `POST /oidc/revoke` | **Created realm** | Revokes token for this realm |
 | `GET /hosted-login/` | **Created realm** | Hosted login page for this realm |
 
-### Admin API endpoints — ANY URL works (security is token-based)
+### Admin API endpoints — any realm host in YOUR account works (security is token-based)
 
-Admin operations validate the Bearer token's account_id, NOT the Host header. You can call these from either the master URL or the created realm URL — both work. **Use the created realm URL for consistency.**
+The admin CRUD controllers validate the Bearer token's `account_id`, NOT the Host header. You can call them on the master URL or any of your realm URLs — they resolve the target from the path's `realmId`/`accountId` and check it against your token's account.
+
+**Exception — the token endpoint itself DOES use the Host header.** `POST /oidc/token` resolves a realm from the Host before issuing the token; the host must map to *some* valid realm in your account, or it fails with realm-not-found. So "any URL" is only true once you hold the token — minting it requires a host that resolves to a real realm (the master URL always works for this).
 
 | Endpoint | URL | Auth |
 |---|---|---|
-| `POST /oidc/token` (client_credentials + access_key) | **Any** — access key is validated globally | None (generates token) |
-| `POST /realms/{realmId}/users` (create user) | **Any** — realmId is in the path | Bearer admin token |
+| `POST /oidc/token` (client_credentials + access_key) | **Host must resolve to a real realm** (master URL works) | None (generates token) |
+| `POST /realms/{realmId}/users` (create user) | **Any realm host in your account** — realmId is in the path | Bearer admin token |
 | `GET /realms/{realmId}/users` (list users) | **Any** | Bearer admin token |
 | `GET /realms/{realmId}/users/by-username/{userName}` | **Any** | Bearer admin token |
 | `PUT /realms/{realmId}/users/{userName}` | **Any** | Bearer admin token |
@@ -217,6 +219,103 @@ curl -X POST https://{realm-url}/oidc/token \
 ```
 
 ---
+
+## Onboarding / Admin API (realm, app client, URLs, IdP, access keys, RBAC)
+
+These are the endpoints a SaaS app calls at **customer-onboarding time** (Model A) or during dev setup. All require an admin Bearer token from the `client_credentials` grant. Auth column: `M+R` = role `master_realm_manage` OR `realm_manage`; `M` = `master_realm_manage` only. A customer's Apptor-issued access key carries `realm_manage` scoped to its account — it can do every `M+R` operation within its own account and nothing in another account.
+
+> **There is NO account-create endpoint in scope.** Apptor provisions accounts and hands over the access key. Do not attempt `POST /accounts` — it requires `master_realm_manage`, which customer keys do not have.
+
+> **Always cross-check against the live OpenAPI** at `/swagger/apptor-auth-server-0.5.yml`. The list below is verified against the server source but the live spec is authoritative.
+
+### Realm
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| POST | `accounts/{accountId}/realms` | M+R | Body = `Realm` DTO. `accountId` comes from your admin token's `account_id` claim. Returns `realmId`, `authDomain`. |
+| GET | `accounts/{accountId}/realms` | M+R | List realms in the account |
+| GET | `realms/{realmId}` | M+R | Includes password-policy fields |
+| DELETE | `realms/{realmId}` | M+R | Cascade delete |
+| PUT | `realms/{realmId}/password-policy` | M+R | **Password-policy update ONLY** (despite taking a full `Realm` body, only the policy fields are persisted). There is no general realm-update HTTP endpoint. |
+| GET / PUT | `realms/{realmId}/branding` | M+R | `BrandingConfig` |
+
+**`Realm` DTO fields:** `realmName` (NOT `name`), `authDomain`, `accountId`, `productOwnerRefId`, `defaultPasswordPolicy` (required on create), `passwordMinLength`, `passwordRequiresNumber`, `passwordRequiresSpecialChar`, `passwordRequiresUpperCase`, `passwordRequiresLowerCase`.
+
+### App Client
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| POST | `realms/{realmId}/app-clients` | M+R | Body = `AppClient`. Returns `clientId` + `clientSecret` (secret shown once). |
+| PUT | `realms/{realmId}/app-clients` | M+R | Body's `clientId` selects which one |
+| GET | `realms/{realmId}/app-clients` | M+R | |
+| GET | `app-clients/{clientId}` | M+R | |
+| DELETE | `app-clients/{appClientId}` | M+R | |
+| POST | `app-clients/{clientId}/reset-secret` | M+R | Rotates secret; new secret in response |
+| POST | `app-clients/{appClientId}/resource-servers/{resourceServerName}` | M+R | Link one RS **by name** |
+| PUT | `app-clients/{appClientId}/resource-servers` | M+R | Replace all RS links; body = `List<String>` of names |
+
+**`AppClient` DTO fields:** `name`, `appType` (`spa`/`web`/`mobile`/`m2m`), `realmId`, `idpClient` (**always send `false`**), `multiTenant` (**always send `false`** — no-op server-side), `accessTokenExpirationInMin`, `idTokenExpirationInMin`, `refreshTokenExpirationInDays`, `requiresMfa`, `resourceServerNames`, `passwordTokenExpiryInSeconds`, `otpValidityInSeconds`.
+
+### App URLs
+
+`UrlType` values: `login`, `logout`, `redirect`, `reset_password`, `post_reset_password`.
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| POST | `app-clients/{clientId}/url-type/{urlType}/app-urls` | M+R | **URL type is mid-path**, not in the body. Body = `List<AppUrl>` where each `AppUrl` = `{ "type": "...", "url": "...", "appClientId": "..." }`. |
+| GET | `app-clients/{clientId}/app-urls` | M+R | |
+| DELETE | `app-clients/{clientId}/app-urls/{urlType}/url/{url}` | M+R | URL value in path (URL-encode it). Note the path ordering differs from POST. There is no PUT — delete then re-create. |
+
+**Register `login`, `redirect`, `logout` BEFORE testing login.** See hosted-login fallback below.
+
+### Identity Provider Connections
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET | `identity-providers` | authenticated | Global list of supported providers |
+| POST | `app-clients/{clientId}/idp-connections` | M+R | Body = `IdpConnection` |
+| GET | `app-clients/{clientId}/idp-connections` | M+R | |
+| GET | `idp-connections/{idpConnectionId}` | M+R | |
+| PUT | `app-clients/{clientId}/idp-connections/{idpConnectionId}` | M+R | |
+| DELETE | `app-clients/{clientId}/idp-connections/{idpConnectionId}` | M+R | |
+
+**`IdpConnection` DTO fields:** `providerId` (`local`/`google`/`microsoft`), `clientId` (the EXTERNAL provider's OAuth client id), `clientSecret` (external secret), `issuerUrl`, `metadataUrl`, `grantType`, `authUrl`. See "Identity Provider Configuration" for required-field rules and the Microsoft tenant URL handling.
+
+### Access Keys
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| POST | `users/{userId}/access-keys` | M+R | No body. Returns `accessKeyId` + `accessKeySecret` (secret shown once). |
+| GET | `users/{userId}/access-keys` | M+R | secret nulled |
+| GET | `access-keys/{accessKeyId}` | M+R | secret nulled |
+| POST | `access-keys/{accessKeyId}/revoke` | M+R | Destructive; no DELETE |
+
+A newly created access key gets `master_realm_manage` only if created under a user in realm `master` of account `master`; in any other realm it gets **no role by default** and must be granted via `POST /resource-servers/{resourceServerId}/access-keys/{accessKeyId}/roles`.
+
+### Resource Servers / Roles / Permissions
+
+Resource servers are scoped to the **account**, not the realm (`POST /accounts/{accountId}/resource-servers`). Roles + permissions hang off a resource server. For per-tenant role isolation across realms in one account, plan resource-server ownership deliberately.
+
+| Method | Path | Auth |
+|---|---|---|
+| POST / GET | `accounts/{accountId}/resource-servers` | M+R |
+| GET / PUT | `resource-servers/{resourceServerId}` | M+R |
+| POST / GET | `resource-servers/{resourceServerId}/roles` | M+R |
+| PUT / DELETE | `roles/{roleId}` | M+R |
+| POST / GET | `resource-servers/{resourceServerId}/permissions` | M+R |
+| PUT / DELETE | `permissions/{permissionId}` | M+R |
+| POST | `roles/{roleId}/permissions` | M+R |
+| POST | `resource-servers/{resourceServerId}/realms/{realmId}/users/{userName}/roles` | M+R | assign roles to a user |
+| POST | `resource-servers/{resourceServerId}/access-keys/{accessKeyId}/roles` | M+R | assign roles to an access key |
+
+### Email / SMS config + templates, password policy
+
+- Email config: `POST realms/{realmId}/email-configs` or `accounts/{accountId}/email-configs`; `PUT|DELETE email-configs/{id}`; `POST email-configs/test`; `GET .../email-configs/effective` (shows the realm→account→master fallback resolution).
+- Email templates: `POST realms/{realmId}/email-types/{emailType}/email-templates` (or account-level); `PUT|DELETE email-templates/{id}`; `.../effective` variants.
+- SMS: same shape under `sms-configs` / `sms-templates`.
+- Password policy: `PUT realms/{realmId}/password-policy` (see Realm table).
+
+All M+R. Full field lists are in the live OpenAPI spec.
 
 ## User Management API
 

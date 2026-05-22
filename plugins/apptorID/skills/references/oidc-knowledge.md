@@ -6,6 +6,8 @@ Stack-agnostic reference for implementing apptorID OAuth2/OIDC integration in an
 
 All endpoints are relative to the realm's auth domain URL (e.g., `https://acme-x1y2.sandbox.auth.apptor.io`).
 
+> **The `Host` header is load-bearing.** The server resolves the realm for every OIDC endpoint (`/oidc/auth`, `/oidc/token`, `/oidc/login`, `/oidc/jwks`, `/.well-known/openid-configuration`, etc.) from the inbound `Host` header — except `/oidc/userinfo` and `/oidc/logout`, which work off the bearer token / session. Discovery rebuilds every URL from the inbound host, so each realm's discovery returns that realm's URLs. **Any reverse proxy in front of apptorID MUST preserve the original `Host` header**, or realm resolution breaks and you get realm-not-found errors.
+
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/.well-known/openid-configuration` | GET | OIDC discovery — returns all endpoint URLs |
@@ -196,10 +198,12 @@ Response:
 {
   "access_token": "new-eyJhbGci...",
   "id_token": "new-eyJhbGci...",
-  "refresh_token": "new-rt-...",    ← may or may not rotate
+  "refresh_token": "new-rt-...",    ← always reissued, but the OLD one is NOT invalidated
   "expires_in": 3600
 }
 ```
+
+> **Refresh token behavior:** every refresh mints a NEW refresh token, but the server does NOT revoke the old one — both stay valid until each expires or is explicitly revoked. This is reuse-tolerant, not RFC-compliant rotation. To invalidate a refresh token, call `POST /oidc/revoke`, or `GET /oidc/logout` (which revokes the session's tokens). Don't rely on a refresh implicitly killing the prior token.
 
 ## JWT Token Claims
 
@@ -257,17 +261,19 @@ When registering URLs for an app client (via Admin UI or MCP tools):
 | `reset_password` | Password reset page URL |
 | `post_reset_password` | Where to redirect after password reset |
 
-## Hosted Login — URL Registration Required
+## Hosted Login — URL Registration + Fallback
 
 apptorID's hosted login page is at: `https://{realm-domain}/hosted-login/`
 
-IMPORTANT: The auth flow always redirects to a registered login URL. There is no automatic fallback to the hosted login page. You MUST register the hosted login URL as a "login" type URL on the app client:
+**There IS an automatic fallback** (server commit `feat(auth): fall back to hosted SPA when no login/reset URL is registered`): if NO `login` URL is registered for an app client, the server resolves it to the realm's hosted SPA `https://{realm-domain}/hosted-login/`. The same applies to `reset_password`. `logout` and `post_reset_password` do NOT fall back (they throw if missing, since they point to customer-owned destinations).
 
-  URL: `https://{realm-domain}/hosted-login/`
-  Type: `login`
+Practical consequences:
+- Register your real `login` URL explicitly — customer-registered URLs always win over the fallback.
+- **Seeing the hosted login page during a test usually means you forgot to register your `login` URL, NOT that your integration code is broken.** Register URLs before testing.
+- MCP `full_setup` no longer auto-registers the hosted login URL (the fallback covers it). After `full_setup` the app-urls list may be empty by design — register your real URLs explicitly.
 
-When this is registered, the `/oidc/auth` endpoint redirects to:
-  `https://{realm-domain}/hosted-login/?request_id={request_id}`
+When a `login` URL is registered (or the fallback resolves), the `/oidc/auth` endpoint redirects to:
+  `https://{login-url}?request_id={request_id}`
 
 The hosted login page then fetches its config from `/api/hosted-login/config?requestId={request_id}` and renders the login form with configured IdPs.
 
@@ -277,7 +283,7 @@ The `/oidc/auth` endpoint accepts an optional `login_uri` query parameter:
 - If provided: apptorID redirects to that URL with `?request_id=...` for client-hosted login
 - If not provided and one login URL is registered: uses that
 - If not provided and multiple registered: uses the first one
-- If not provided and none registered: returns an error (no automatic fallback)
+- If not provided and none registered: falls back to the realm's hosted login SPA (see above)
 
 ## Discovery Response Structure
 
@@ -313,18 +319,30 @@ The `/oidc/auth` endpoint accepts an optional `login_uri` query parameter:
 ## Multi-Tenant Architecture
 
 ```
-Account (organization)
+Account (organization)  ← Apptor-provisioned; the access key is bound here; the SECURITY boundary
 ├── Realm 1 (auth domain: tenant1.sandbox.auth.apptor.io)
-│   ├── Users (email unique per realm)
+│   ├── Users (email + userName unique per realm)
 │   ├── App Clients (each with client_id + secret)
 │   │   └── IdP Connections (local, Google, Microsoft per client)
 │   ├── Password Policy (per realm)
 │   └── Branding (per realm or per app client)
 ├── Realm 2 (auth domain: tenant2.sandbox.auth.apptor.io)
 │   └── ...
-└── Resource Servers (account-level)
-    ├── Roles (admin, editor, viewer)
-    └── Permissions
+├── Resource Servers (account-level — NOT per realm)
+│   ├── Roles (admin, editor, viewer)
+│   └── Permissions
+└── JWT signing keys (account-level — shared by ALL realms in this account)
 ```
 
-Each realm is fully isolated — different users, different apps, different IdPs, different domains.
+### Realm = data boundary, Account = security boundary
+
+Each realm isolates **data**: different users, app clients, IdPs, password policy, branding, auth domain. But realms are NOT cryptographically isolated from each other:
+
+- **JWT signing keys are per-account, not per-realm.** Every realm under one account signs tokens with the same key and publishes the same JWKS (same `kid`). (`JWKKeyPairService` keys by `accountId`; `/oidc/jwks` looks up by `realm.getAccountId()`.)
+- A JWT minted while logging into realm A **validates** at admin endpoints hit on realm B's host, as long as both realms are in the same account. The server's own validator checks signature + expiry, not `iss`/`aud`/realm scope.
+- Admin authorization is account-scoped: a `realm_manage` token can act on any realm in its account; only `master_realm_manage` (Apptor's own master key) crosses accounts. Neither role can be restricted to a single realm with current code.
+- A token from account X does NOT validate against account Y (different signing keys).
+
+**Implication for SaaS Model A (realm per customer):** putting your customers in separate realms under your one account gives data isolation and per-customer branding/IdPs, but NOT cryptographic isolation between them — your app's JWT verifier is the trust boundary and you authorize per-tenant via the `org_id` claim (or the realm the user belongs to). If a customer genuinely needs hard cryptographic isolation, that requires a separate Apptor account per tenant, which only Apptor can provision.
+
+**Relying-party guidance is unchanged:** still verify `iss` matches the realm you expect and validate the signature against that realm's JWKS. The point above is about what the auth server enforces internally, not about relaxing your own client-side checks.

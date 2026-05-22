@@ -15,9 +15,11 @@ You add user management capabilities to an app that already has (or is getting) 
 
 Generates backend endpoints for creating, listing, getting, updating, disabling, and deleting users via apptorID. Wires `orgRefId` → `org_id` and `userRefId` → `user_id` in JWT tokens so the developer's app can map apptorID users to its own records.
 
-## MANDATORY: Read API Spec First
+## MANDATORY: Ground in the Live OpenAPI Spec First
 
-Before writing ANY code, read `references/apptorID-api-spec.md`. This is the single source of truth for all endpoint URLs, parameter names, and request formats. Do NOT guess parameter names or endpoint paths.
+Before writing ANY code, fetch the live OpenAPI spec from the realm (`https://{realm-authDomain}/swagger/apptor-auth-server-0.5.yml`, or browse `/swagger-ui/`) — it is authoritative. Then read `references/apptorID-api-spec.md` as the curated quick reference. When they conflict, the live spec wins. Do NOT guess parameter names or endpoint paths.
+
+Note: MCP `apptorID_create_user` does NOT accept `orgRefId`/`userRefId`/`appClientId`. To create users with those fields, use the HTTP API `POST /realms/{realmId}/users` directly.
 
 ## HARD GATE: Explore and Confirm Before Building
 

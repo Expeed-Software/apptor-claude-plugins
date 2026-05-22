@@ -1,6 +1,12 @@
-# Multi-Tenant Database — apptorID Per-Org Configuration
+# Multi-Tenant Database — apptorID Model A (Realm per Customer Org)
 
-When each organization/tenant in your application has its own apptorID realm and app client, you need database storage for per-org authentication configuration. This reference provides the schema, models, and repository code for different stacks.
+This is the reference for **Model A**: each customer organization in your application gets its own apptorID realm + app client. You provision each org's realm **at customer-signup time over the HTTP API** (not via MCP — MCP is dev-time only), and you store the resulting per-org configuration in YOUR database so you can route logins and make later admin calls.
+
+> **If you picked Model B (one shared realm + `orgRefId`), you do NOT need this file.** Model B uses a single realm/app client whose credentials live in app config; tenants are distinguished by the `org_id` JWT claim. See `setup/SKILL.md` → "Tenancy Models".
+
+> **Boundary reality:** all realms you create live under your ONE Apptor account, and realms in the same account share JWT signing keys. Model A isolates data (users, app clients, IdPs, branding, password policy) but not cryptography — your app's JWT verifier is the trust boundary, and you authorize per-tenant via the `org_id` claim you choose to set. Hard cryptographic isolation between your customers would require separate Apptor accounts, which only Apptor provisions. See `oidc-knowledge.md`.
+
+> **`realmId` is mandatory in your per-org row.** Every later admin call for that org (`POST /realms/{realmId}/users`, secret rotation, etc.) needs it. Storing only the realm URL + clientId is not enough.
 
 ## Table of Contents
 1. [Database Schema](#database-schema)
@@ -23,7 +29,9 @@ When each organization/tenant in your application has its own apptorID realm and
 CREATE TABLE org_auth_config (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id UUID NOT NULL,                          -- FK to your org/tenant table
-    realm_url TEXT NOT NULL,                        -- e.g., 'acme-x1y2.sandbox.auth.apptor.io'
+    realm_id TEXT NOT NULL,                         -- apptorID realm UUID — REQUIRED for all later admin calls
+    realm_name TEXT NOT NULL,                       -- apptorID realm display name
+    realm_url TEXT NOT NULL,                        -- authDomain, e.g., 'acme-x1y2.sandbox.auth.apptor.io'
     client_id TEXT NOT NULL,                        -- apptorID app client ID
     client_secret_encrypted TEXT NOT NULL,          -- Encrypted client secret
     redirect_uri TEXT NOT NULL,                     -- Callback URL for this org
@@ -44,6 +52,7 @@ CREATE TABLE org_auth_config (
 -- Index for quick lookups
 CREATE INDEX idx_org_auth_config_org_id ON org_auth_config(org_id);
 CREATE INDEX idx_org_auth_config_realm_url ON org_auth_config(realm_url);
+CREATE INDEX idx_org_auth_config_realm_id ON org_auth_config(realm_id);
 
 -- Optional: If tenants are identified by subdomain or custom domain
 ALTER TABLE org_auth_config ADD COLUMN org_identifier TEXT;
@@ -56,6 +65,7 @@ CREATE UNIQUE INDEX idx_org_auth_config_identifier ON org_auth_config(org_identi
 
 ```sql
 DROP INDEX IF EXISTS idx_org_auth_config_identifier;
+DROP INDEX IF EXISTS idx_org_auth_config_realm_id;
 DROP INDEX IF EXISTS idx_org_auth_config_realm_url;
 DROP INDEX IF EXISTS idx_org_auth_config_org_id;
 DROP TABLE IF EXISTS org_auth_config;
@@ -86,6 +96,12 @@ public class OrgAuthConfig {
 
     @Column(name = "org_id", nullable = false, unique = true)
     private UUID orgId;
+
+    @Column(name = "realm_id", nullable = false)
+    private String realmId;
+
+    @Column(name = "realm_name", nullable = false)
+    private String realmName;
 
     @Column(name = "realm_url", nullable = false)
     private String realmUrl;
@@ -164,6 +180,7 @@ public interface OrgAuthConfigRepository extends JpaRepository<OrgAuthConfig, UU
     Optional<OrgAuthConfig> findByOrgId(String orgId);
     Optional<OrgAuthConfig> findByOrgIdentifier(String orgIdentifier);
     Optional<OrgAuthConfig> findByRealmUrl(String realmUrl);
+    Optional<OrgAuthConfig> findByRealmId(String realmId);
     boolean existsByOrgId(UUID orgId);
 }
 ```
@@ -180,6 +197,8 @@ import { sequelize } from '../db';
 export class OrgAuthConfig extends Model {
   declare id: string;
   declare orgId: string;
+  declare realmId: string;
+  declare realmName: string;
   declare realmUrl: string;
   declare clientId: string;
   declare clientSecretEncrypted: string;
@@ -206,6 +225,8 @@ OrgAuthConfig.init(
   {
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
     orgId: { type: DataTypes.UUID, allowNull: false, unique: true, field: 'org_id' },
+    realmId: { type: DataTypes.TEXT, allowNull: false, field: 'realm_id' },
+    realmName: { type: DataTypes.TEXT, allowNull: false, field: 'realm_name' },
     realmUrl: { type: DataTypes.TEXT, allowNull: false, field: 'realm_url' },
     clientId: { type: DataTypes.TEXT, allowNull: false, field: 'client_id' },
     clientSecretEncrypted: { type: DataTypes.TEXT, allowNull: false, field: 'client_secret_encrypted' },
@@ -232,6 +253,8 @@ OrgAuthConfig.init(
 model OrgAuthConfig {
   id                    String   @id @default(uuid())
   orgId                 String   @unique @map("org_id")
+  realmId               String   @map("realm_id")
+  realmName             String   @map("realm_name")
   realmUrl              String   @map("realm_url")
   clientId              String   @map("client_id")
   clientSecretEncrypted String   @map("client_secret_encrypted")
@@ -253,6 +276,7 @@ model OrgAuthConfig {
   @@map("org_auth_config")
   @@index([orgId])
   @@index([realmUrl])
+  @@index([realmId])
 }
 ```
 
@@ -275,6 +299,8 @@ class OrgAuthConfig(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id = Column(UUID(as_uuid=True), ForeignKey("{{org_table}}.{{org_pk}}", ondelete="CASCADE"), nullable=False, unique=True)
+    realm_id = Column(String, nullable=False)
+    realm_name = Column(String, nullable=False)
     realm_url = Column(String, nullable=False)
     client_id = Column(String, nullable=False)
     client_secret_encrypted = Column(String, nullable=False)
@@ -293,6 +319,7 @@ class OrgAuthConfig(Base):
     __table_args__ = (
         Index("idx_org_auth_config_org_id", "org_id"),
         Index("idx_org_auth_config_realm_url", "realm_url"),
+        Index("idx_org_auth_config_realm_id", "realm_id"),
     )
 
     @property
@@ -349,6 +376,124 @@ class OrgAuthConfigRepository:
 ```
 
 ---
+
+## Runtime Org Onboarding Service (the core of Model A)
+
+When a new customer org signs up, your app provisions its realm over the **HTTP API** using the single access key Apptor gave you (bound to your one account). MCP is NOT used at runtime. The sequence:
+
+1. Mint an admin token: `POST /oidc/token` `grant_type=client_credentials` with `access_key_id` + `access_key_secret` (form-encoded). The token's `account_id` claim is your account — you need it for the realm-create path.
+2. `POST /accounts/{accountId}/realms` → realm (`realmId`, `authDomain`)
+3. `POST /realms/{realmId}/app-clients` with `idpClient:false, multiTenant:false` → `clientId`, `clientSecret` (secret shown once)
+4. `POST /app-clients/{clientId}/url-type/{login|redirect|logout}/app-urls` → register URLs BEFORE first login
+5. `POST /app-clients/{clientId}/idp-connections` per IdP (optional)
+6. `POST /realms/{realmId}/users` → the org's first admin user (optionally with `orgRefId`/`userRefId`)
+7. Encrypt `clientSecret`, persist the `org_auth_config` row (including `realmId` + `realmName`)
+
+> Auth note: your access key carries `realm_manage` scoped to your account, so all these calls succeed for any realm under your account. They will 403 if you target another account — which you can't, because the token's `account_id` is fixed.
+
+> Endpoint shapes are authoritative in the live OpenAPI spec (`/swagger/apptor-auth-server-0.5.yml`). The paths below are verified against the server but always cross-check the live spec.
+
+### Spring Boot example
+
+```java
+@Service
+public class OrgOnboardingService {
+
+    private final OrgAuthConfigRepository repository;
+    private final EncryptionService encryptionService;
+    private final WebClient web;            // baseUrl = your account's realm/master URL
+    private final String accessKeyId;       // from config — Apptor-issued, one per account
+    private final String accessKeySecret;   // from config — encrypted at rest / secret manager
+    private final String authBaseUrl;       // e.g. https://master.sandbox.auth.apptor.io
+
+    /** Provision a brand-new apptorID realm for a customer org and persist its config. */
+    public OrgAuthConfig onboard(UUID orgId, String orgDisplayName,
+                                 String appCallbackUrl, String appLoginUrl, String appLogoutUrl,
+                                 List<String> idps) {
+        String token = mintAdminToken();
+        String accountId = accountIdFromToken(token);   // decode the account_id claim
+
+        // 2. Create the realm
+        Map<String, Object> realm = web.post()
+            .uri(authBaseUrl + "/accounts/{accountId}/realms", accountId)
+            .header("Authorization", "Bearer " + token)
+            .bodyValue(Map.of(
+                "realmName", orgDisplayName,
+                "defaultPasswordPolicy", true))      // password policy is required on create
+            .retrieve().bodyToMono(Map.class).block();
+        String realmId   = (String) realm.get("realmId");
+        String authDomain = (String) realm.get("authDomain");
+
+        // 3. Create the app client — flags always false
+        Map<String, Object> client = web.post()
+            .uri(authBaseUrl + "/realms/{realmId}/app-clients", realmId)
+            .header("Authorization", "Bearer " + token)
+            .bodyValue(Map.of(
+                "name", orgDisplayName + " App",
+                "appType", "web",                    // spa | web | mobile | m2m
+                "realmId", realmId,
+                "idpClient", false,
+                "multiTenant", false))
+            .retrieve().bodyToMono(Map.class).block();
+        String clientId     = (String) client.get("clientId");
+        String clientSecret = (String) client.get("clientSecret");   // shown once
+
+        // 4. Register URLs BEFORE any login test (type is in the path; body is a list)
+        addUrl(token, clientId, "redirect", appCallbackUrl);
+        addUrl(token, clientId, "login",    appLoginUrl);
+        addUrl(token, clientId, "logout",   appLogoutUrl);
+
+        // 5. Connect IdPs (optional). For microsoft pass tenantId; google needs client id+secret.
+        // for (String idp : idps) addIdpConnection(token, clientId, idp, ...);
+
+        // 7. Persist — REQUIRED: realmId + realmName, secret encrypted
+        OrgAuthConfig cfg = new OrgAuthConfig();
+        cfg.setOrgId(orgId);
+        cfg.setRealmId(realmId);
+        cfg.setRealmName(orgDisplayName);
+        cfg.setRealmUrl(authDomain);
+        cfg.setClientId(clientId);
+        cfg.setClientSecretEncrypted(encryptionService.encrypt(clientSecret));
+        cfg.setRedirectUri(appCallbackUrl);
+        cfg.setEnabledIdps(idps);
+        return repository.save(cfg);
+    }
+
+    private String mintAdminToken() {
+        Map<String, Object> resp = web.post()
+            .uri(authBaseUrl + "/oidc/token")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .bodyValue("grant_type=client_credentials"
+                + "&access_key_id=" + accessKeyId
+                + "&access_key_secret=" + accessKeySecret)
+            .retrieve().bodyToMono(Map.class).block();
+        return (String) resp.get("access_token");
+    }
+
+    private void addUrl(String token, String clientId, String type, String url) {
+        if (url == null || url.isBlank()) return;
+        web.post()
+            .uri(authBaseUrl + "/app-clients/{clientId}/url-type/{type}/app-urls", clientId, type)
+            .header("Authorization", "Bearer " + token)
+            .bodyValue(List.of(Map.of("type", type, "url", url, "appClientId", clientId)))
+            .retrieve().bodyToMono(Object.class).block();
+    }
+
+    /** Decode the account_id claim from the admin JWT (verify signature in real code). */
+    private String accountIdFromToken(String jwt) {
+        String payload = new String(Base64.getUrlDecoder()
+            .decode(jwt.split("\\.")[1]), StandardCharsets.UTF_8);
+        // parse JSON, return the "account_id" field
+        return JsonPath.read(payload, "$.account_id");
+    }
+}
+```
+
+The same call sequence applies in Node/Python/etc. — only the HTTP client differs. Key invariants for any language:
+- App client created with `idpClient:false, multiTenant:false`.
+- URLs registered before first login (`redirect`, `login`, `logout`).
+- Store `realmId` + `realmName` + encrypted secret in your row.
+- `accountId` for the realm-create path comes from the admin token's `account_id` claim — you do not hardcode it.
 
 ## Admin API for Managing Configs
 

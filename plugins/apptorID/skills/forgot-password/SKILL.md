@@ -21,9 +21,9 @@ Generates: a forgot-password endpoint (triggers apptorID's reset email), a passw
 - **Adaptive follow-ups.** After building, offer relevant next steps.
 - Read the relevant reference file BEFORE writing code.
 
-## MANDATORY: Read API Spec First
+## MANDATORY: Ground in the Live OpenAPI Spec First
 
-Before writing ANY code, read `references/apptorID-api-spec.md`. This is the single source of truth for all endpoint URLs, parameter names, and the reset password flow. Do NOT guess endpoint paths.
+Before writing ANY code, fetch the live OpenAPI spec from the realm (`https://{realm-authDomain}/swagger/apptor-auth-server-0.5.yml`, or browse `/swagger-ui/`) — it is authoritative for endpoint URLs, parameter names, and the reset password flow. Then read `references/apptorID-api-spec.md` as the curated quick reference. When they conflict, the live spec wins. Do NOT guess endpoint paths.
 
 ## HARD GATE: Explore and Confirm Before Building
 

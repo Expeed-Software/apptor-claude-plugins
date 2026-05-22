@@ -288,7 +288,7 @@ All tool names are prefixed with `apptorID_`:
 
 ## Key Details
 
-- **Hosted login URL:** Register `https://{authDomain}/hosted-login/` as `login` type URL. Required — no fallback.
+- **Hosted login URL:** Register your real `login` URL (for hosted login, `https://{authDomain}/hosted-login/`). If none is registered, the server falls back to the hosted SPA for `login`/`reset_password` only — but register explicitly so the fallback doesn't mask a missing URL during testing.
 - **Hosted login has NO reset password page.** The app must build its own. Register the app's reset page as `reset_password` type.
 - **Default SMTP:** Works without email config. Fallback: realm → account → master.
 - **User with password:** ACTIVE immediately, no email sent. Without password (MCP) → FORCE_PASSWORD_CHANGE status, no email sent (MCP bypasses notifications).
