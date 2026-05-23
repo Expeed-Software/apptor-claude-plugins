@@ -8,6 +8,8 @@ Claude Code plugins for the [apptor](https://apptor.io) ecosystem.
 |--------|-------------|
 | [apptorID](plugins/apptorID/) | Integrate apptorID (OAuth2/OIDC) authentication into any application |
 | [expeed-review-protocol](plugins/expeed-review-protocol/) | Mandatory three-tier review gate — blocks "done" and `git push` until the tier-appropriate checklist (L1, smoke test, cross-layer contract check, adversarial review, Tier 3 runbook/rollback) is filled with real evidence |
+| [observekit](plugins/observekit/) | Integrate OpenTelemetry with ObserveKit (Expeed's observability platform) into any application — per-app, direct push, key wired safely per environment |
+| [apptor-flow](plugins/apptor-flow/) | Author Apptor Flow workflows as parser-valid flow JSON from a natural-language description, using the live node schema as the single source of truth; validates via the real parser and can create org-scoped drafts via REST |
 
 ## Install
 

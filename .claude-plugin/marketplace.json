@@ -24,6 +24,12 @@
       "description": "Integrate OpenTelemetry with ObserveKit (Expeed's observability platform) into any application. Detects the framework, writes idiomatic SDK config + dependency + launch flag, wires the API key safely per environment (K8s Secret / Vault / AWS-Azure-GCP Secrets Manager / .NET user-secrets / gitignored local file), and verifies traces/metrics/logs are flowing. Per-app, direct push, no Collector. Supports Java/Spring/Micronaut/Quarkus, Node/Express/NestJS/Fastify, Python/Django/Flask/FastAPI, .NET, Go, Ruby, PHP, Rust.",
       "source": "./plugins/observekit",
       "category": "observability"
+    },
+    {
+      "name": "apptor-flow",
+      "description": "Author Apptor Flow workflows as parser-valid flow JSON from a natural-language description, using the live node schema as the single source of truth. Validates through the real JSON parser and can create the flow as an org-scoped draft via the REST API (a human publishes in the designer). Draft-only.",
+      "source": "./plugins/apptor-flow",
+      "category": "development"
     }
   ]
 }
