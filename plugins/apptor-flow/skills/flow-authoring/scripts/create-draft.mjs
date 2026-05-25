@@ -17,12 +17,13 @@
  *   the key's own organization — there is no cross-org override for ordinary keys.
  *
  * Usage:
- *   APPTOR_FLOW_BASE_URL=http://localhost:8090 \
+ *   APPTOR_FLOW_BASE_URL=<your environment/tenant API URL> \
  *   APPTOR_FLOW_API_KEY=apk_xxxxx \
  *   node create-draft.mjs /abs/path/to/flow.json
  *
  * Env:
- *   APPTOR_FLOW_BASE_URL  base URL of the API server (default http://localhost:8090)
+ *   APPTOR_FLOW_BASE_URL  base URL of the API server — REQUIRED, no default
+ *                         (per environment/tenant; e.g. http://localhost:8080 in dev)
  *   APPTOR_FLOW_API_KEY   Apptor Flow API key, starts with `apk_` (REQUIRED)
  *
  * Argv:
@@ -42,17 +43,24 @@
 
 import { readFile } from 'node:fs/promises';
 
-const DEFAULT_BASE_URL = 'http://localhost:8090';
-
 function fail(code, message) {
   process.stderr.write(message.endsWith('\n') ? message : message + '\n');
   process.exit(code);
 }
 
-const baseUrl = (process.env.APPTOR_FLOW_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
+const baseUrl = (process.env.APPTOR_FLOW_BASE_URL || '').trim().replace(/\/+$/, '');
 const apiKey = process.env.APPTOR_FLOW_API_KEY;
 
 // --- Validate inputs up front (exit 2 on bad usage) ---------------------------
+// No default base URL: it is per environment/tenant and MUST be supplied explicitly.
+if (!baseUrl) {
+  fail(
+    2,
+    'Error: missing required env var APPTOR_FLOW_BASE_URL.\n' +
+      'Set it to your environment/tenant API base URL — there is no default ' +
+      '(e.g. http://localhost:8080 in local dev). Ask the user; never assume.'
+  );
+}
 if (!apiKey || !apiKey.trim()) {
   fail(
     2,

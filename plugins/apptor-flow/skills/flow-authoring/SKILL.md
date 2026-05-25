@@ -22,10 +22,12 @@ REST. Never publish — publishing is a human action in the designer UI.
   positioning.
 - `references/examples.md` — six redacted, harness-validated templates (linear
   REST, ifElse+setVariable, aiTask+tool, split/join, setVariable, waitNode).
-- The **live node vocabulary** (authoritative, v3): `GET /api/metadata/node-types`.
-  This is the single source of truth for which nodes exist and their
-  properties / valid outbound connections / outputs. Always reconcile node and
-  property names against it.
+- The **live node vocabulary** — the single source of truth for which nodes
+  exist and their properties / valid outbound connections / outputs:
+  `GET {baseUrl}/api/metadata/node-types`, read with the **same `apk_` API key**
+  (header `X-API-Key`). `{baseUrl}` is per environment/tenant — **no hardcoded
+  default; ask the user.** Always reconcile node and property names against it,
+  and re-read it rather than trusting these docs (which can lag the schema).
 
 ## Hard rules (never violate)
 
@@ -43,15 +45,48 @@ REST. Never publish — publishing is a human action in the designer UI.
    reviews and publishes from the designer UI. Never call any publish endpoint.
 5. **Never invent connection ids / secrets.** If you can't resolve a real one,
    insert a clearly-marked placeholder and tell the user.
+6. **No schema → STOP. Do not guess.** The node vocabulary (which nodes exist,
+   their properties, when to use each) comes ONLY from the live schema. If you
+   cannot read `GET /api/metadata/node-types` (no base URL, no key, server
+   unreachable, or 401), **do not author a flow** — stop and ask the user for the
+   base URL + an `apk_` API key. Producing a flow without the real schema yields
+   dead, unusable output; refusing is correct.
+7. **Pick nodes from the schema's own descriptions — never hardcode "if user
+   says X use node Y".** Each node in the schema carries a `description` +
+   `useCases` stating when to use it. Match the user's intent against those. In
+   particular: when the flow needs **data entered by the user**, the schema's
+   `inputNode` says *"Use this whenever the flow needs data FROM the user"* — use
+   it (set `inputType` + `variableName`; reference the value later as
+   `{variableName}`). A bare `startEvent` does NOT collect user input.
 
 ## Procedure
 
-### 1. Gather intent
+### 0. Read the live schema FIRST (mandatory — fail loud if you can't)
+Before anything else, get the base URL + an `apk_` API key from the user (the URL
+is per-environment/tenant — there is NO default; ask). Then fetch the live node
+schema:
+```
+GET {baseUrl}/api/metadata/node-types     # header: X-API-Key: apk_...
+```
+If you cannot reach it (no URL/key, server down, 401), **STOP per hard rule 6** —
+tell the user exactly what you need and do not author anything. Everything below
+depends on knowing the real nodes.
+
+### 1. Gather intent + PROPOSE and CONFIRM (interactive — do not silently build)
 Understand what the flow should do end to end. Ask **targeted** questions only
-for missing *critical* details — chiefly: which external provider/connection
-each integration step uses (REST API, AI provider, database, email/SMS,
-WhatsApp), the trigger, and the branch conditions. Don't over-interrogate;
-infer node structure from the description.
+for missing *critical* details — chiefly: where the user/data enters (a person
+typing into a form → `inputNode`; a webhook/API; a channel), which
+provider/connection each integration step uses, and any branch conditions.
+
+Then **propose the flow back to the user and wait for confirmation before
+authoring** — e.g.:
+> "Here's what I'll build: **start → inputNode (collect `topic`) → aiTask (write
+> a joke about `{topic}`) → outputNode (show the joke) → end**. The aiTask needs
+> an AI connection — which one? Confirm and I'll generate it."
+
+Only author after they confirm. Map each requirement to a node by reading that
+node's `description`/`useCases` in the schema (hard rule 7) — never a hardcoded
+keyword→node mapping.
 
 ### 2. Resolve connection ids
 Integration steps (`serviceTask`, `aiTask`, `tool`, `waitNode`, `voiceTask`,
@@ -96,9 +131,18 @@ definition, so a malformed flow is rejected by the API (a real check, not a gues
 Do not return or submit JSON you could not validate by at least one of these.
 
 ### 5. Deliver
+
+**First, ASK the user which delivery mode they want** — do not silently choose:
+> "How should I deliver this flow? **(A)** return the validated JSON for you to
+> import/publish in the designer, or **(B)** create it directly as a draft via
+> REST (needs an `apk_` API key with `workflow.create`)?"
+
+Respect their answer. Only fall back to Mode A without asking if creating a draft
+is clearly impossible (no API key available) AND the user has expressed no
+preference — and say so explicitly.
+
 - **Mode A (return JSON):** hand the validated JSON back to the user, listing
-  any placeholders they must fill in. This is the default when the env vars for
-  Mode B are not available.
+  any placeholders they must fill in.
 - **Mode B (create a draft):** run the script — draft only. It authenticates via
   an **Apptor Flow API key** (`apk_…`). `POST /api/processes` accepts the key in
   the `X-API-Key` header; the server's `ApiKeyAuthenticationFilter` authenticates
@@ -109,7 +153,7 @@ Do not return or submit JSON you could not validate by at least one of these.
   is no cross-org override for ordinary keys.
 
   ```bash
-  APPTOR_FLOW_BASE_URL=http://localhost:8090 \
+  APPTOR_FLOW_BASE_URL=<the user's environment URL> \
   APPTOR_FLOW_API_KEY=apk_xxxxx \
   node scripts/create-draft.mjs /abs/path/flow.json
   ```
@@ -117,8 +161,11 @@ Do not return or submit JSON you could not validate by at least one of these.
   The script POSTs `{ "definition": <file contents> }` to `/api/processes` with
   the `X-API-Key` header and prints `processVersionId` / `processId` / `stateCd`.
 
-  Env: `APPTOR_FLOW_API_KEY` is **required** (an `apk_` key whose role grants
-  `workflow.create`); `APPTOR_FLOW_BASE_URL` defaults to `http://localhost:8090`.
+  Env: BOTH are **required, with no defaults** — `APPTOR_FLOW_API_KEY` (an `apk_`
+  key whose role grants `workflow.create`) and `APPTOR_FLOW_BASE_URL` (the
+  tenant/environment URL — it differs per deployment, e.g. `http://localhost:8080`
+  in local dev; **ask the user, never assume**). The same key + URL are what you
+  used to read the schema in step 0.
 
   **If the script fails for any reason, fall back to Mode A** (return the
   validated JSON) and report the error.
