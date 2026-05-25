@@ -43,8 +43,12 @@ REST. Never publish — publishing is a human action in the designer UI.
    (edge goes FROM tool TO aiTask).
 4. **Draft only.** This skill creates drafts (`stateCd` = draft). A human
    reviews and publishes from the designer UI. Never call any publish endpoint.
-5. **Never invent connection ids / secrets.** If you can't resolve a real one,
-   insert a clearly-marked placeholder and tell the user.
+5. **Never invent integration/connection/version ids or secrets, and never put an
+   integration id into a `…ConnectionId` field.** Resolve them via the live API
+   (Procedure step 2): ask the user to choose when several exist, use the one when
+   exactly one exists, and ask "build without a connection (link later) or stop?"
+   when none exist. An integration step also needs its **mandatory** version id
+   (`<prefix>IntegrationVersionId` = the integration's `currentVersionId`).
 6. **No schema → STOP. Do not guess.** The node vocabulary (which nodes exist,
    their properties, when to use each) comes ONLY from the live schema. If you
    cannot read `GET /api/metadata/node-types` (no base URL, no key, server
@@ -88,16 +92,37 @@ Only author after they confirm. Map each requirement to a node by reading that
 node's `description`/`useCases` in the schema (hard rule 7) — never a hardcoded
 keyword→node mapping.
 
-### 2. Resolve connection ids
+### 2. Resolve integrations + connections (ask only when ambiguous or absent)
 Integration steps (`serviceTask`, `aiTask`, `tool`, `waitNode`, `voiceTask`,
-`domainTask`) reference connection ids. Resolve real ids before authoring:
-- Query `GET /api/integrations` and `GET /api/integrations/connections`, OR
-- Query the DB `integration` / `connection` tables (read-only).
+`domainTask`, `whatsappConversation`, …) need **TWO** node properties per
+integration, NOT one — get the exact names from the schema / `IntegrationType`
+(e.g. AI_PROVIDER → `aiProviderConnectionId` + `aiProviderIntegrationVersionId`):
+- `<prefix>IntegrationVersionId` — **MANDATORY.** Without it the runtime resolves
+  no provider and the step silently does nothing (a dead flow that looks valid).
+- `<prefix>ConnectionId` — the specific credentialed connection (or leave unset
+  to use the integration's default connection).
 
-Match by provider/type/name. If exactly one matches, use it. If several match,
-ask the user which. **If none match, insert a clearly-labeled placeholder**
-(e.g. `<REST_CONNECTION_ID>`) and explicitly tell the user it must be filled in
-— **never fabricate an id.**
+Resolve both from the live API only (never the DB, never invented):
+
+**(a) Pick the integration.** `GET {baseUrl}/api/integrations` (header
+`X-API-Key`) → filter by the needed `type` (e.g. `AI_PROVIDER`, `REST_API`):
+- several of that type → **ASK the user which**, showing `name` + `type`;
+- exactly one → use it;
+- none → you cannot build this step → tell the user.
+
+**(b) Set the version id.** `GET {baseUrl}/api/integrations/{integrationId}` →
+use its `currentVersionId` as `<prefix>IntegrationVersionId`. (NEVER guess it.)
+
+**(c) Pick the connection.** `GET {baseUrl}/api/integrations/{integrationId}/connections`:
+- several → **ASK the user which**, showing integration name + connection name;
+- exactly one → use it as `<prefix>ConnectionId`;
+- **none → ASK the user**: "create the flow **without a connection** (link one
+  later in the designer) or **stop**?" If they proceed, leave `<prefix>ConnectionId`
+  unset and **tell them plainly the flow will NOT run until a connection is linked.**
+
+**Never** fabricate an integration id, connection id, or version id; **never** put
+an integration id into the `…ConnectionId` field; the value MUST come from these
+API calls.
 
 ### 3. Author the JSON
 Build the flow per `references/grammar.md` + the live node schema +
