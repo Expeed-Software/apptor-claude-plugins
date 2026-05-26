@@ -113,19 +113,30 @@ function lintAndFix(flow) {
     }
   }
 
-  // 2) Integration fields: every "<prefix>ConnectionId" needs its mandatory companion
-  //    "<prefix>IntegrationVersionId" in the same node, or the runtime resolves no provider.
+  // 2) Integration fields: every "<prefix>ConnectionId" must hold a real connection UUID
+  //    (NEVER a placeholder string like "TICKETING_REST_CONNECTION_ID" — the skill must resolve
+  //    against /api/integrations, not invent), AND must have its mandatory companion
+  //    "<prefix>IntegrationVersionId" in the same node. Empty/absent value is allowed and means
+  //    "leave unset, link later in the designer" — both checks are skipped in that case.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   for (const node of nodes) {
     if (!Array.isArray(node.properties)) continue;
     const keySet = new Set(node.properties.filter(p => p && typeof p.key === 'string').map(p => p.key));
     for (const p of node.properties) {
       if (!p || typeof p.key !== 'string') continue;
       const m = p.key.match(/^(.+?)ConnectionId$/);
-      if (m) {
-        const versionKey = m[1] + 'IntegrationVersionId';
-        if (!keySet.has(versionKey)) {
-          errors.push(`node "${node.key}": integration field "${p.key}" present but mandatory companion "${versionKey}" is missing — the runtime will resolve no provider and the step will silently do nothing. Set it to the integration's currentVersionId.`);
-        }
+      if (!m) continue;
+      const value = p.value;
+      // Empty/absent value → intentionally unset, link later. Skip both checks.
+      if (value === undefined || value === null || value === '') continue;
+      // Non-empty value MUST be a real UUID. Placeholder strings are rejected.
+      if (typeof value !== 'string' || !UUID_RE.test(value.trim())) {
+        errors.push(`node "${node.key}": integration field "${p.key}" has value ${JSON.stringify(value)} which is NOT a valid UUID — that's a placeholder, not a real connection id. The skill must resolve a real connection from /api/integrations; it must never invent ids or insert placeholder strings. Either pick a real connection (which sets both this and "${m[1]}IntegrationVersionId") or remove this property entirely so the field is unset and the user links it later in the designer.`);
+        continue;
+      }
+      const versionKey = m[1] + 'IntegrationVersionId';
+      if (!keySet.has(versionKey)) {
+        errors.push(`node "${node.key}": integration field "${p.key}" present but mandatory companion "${versionKey}" is missing — the runtime will resolve no provider and the step will silently do nothing. Set it to the integration's currentVersionId.`);
       }
     }
   }
