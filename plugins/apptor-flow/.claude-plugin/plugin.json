@@ -1,7 +1,7 @@
 {
   "name": "apptor-flow",
   "description": "Author Apptor Flow workflows as parser-valid flow JSON from a natural-language description, using the live node schema. Validates through the real JSON parser and can create the flow as a draft via the REST API (a human publishes in the designer). Draft-only, org-scoped.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "author": {
     "name": "Expeed Software"
   }

@@ -61,7 +61,31 @@ REST. Never publish — publishing is a human action in the designer UI.
    particular: when the flow needs **data entered by the user**, the schema's
    `inputNode` says *"Use this whenever the flow needs data FROM the user"* — use
    it (set `inputType` + `variableName`; reference the value later as
-   `{variableName}`). A bare `startEvent` does NOT collect user input.
+   `{variableName}`). **For multiple values in a single user interaction, use
+   ONE `inputNode` with `inputType: "form"` and a `formFields` array** — NOT
+   two or more sequential `inputNode` steps (which pause the flow twice).
+8. **Property entries in flow JSON use `key`, NOT `name`. This is the #1 trap.**
+   The schema *defines* a property as `{"name":"inputType","label":...}` — that
+   `name` is the property's identifier. But in the **flow JSON** that the parser
+   reads, every entry in a node's `properties[]` array is a `{key, value}` pair
+   where `key` is the schema's `name` value. The parser reads `property.get("key")`;
+   if the entry is named `name`, the parser **silently ignores the whole property**
+   and the field reaches the runtime as null — a flow that looks valid but is
+   dead. Always emit:
+   ```jsonc
+   // RIGHT — parser reads this:
+   "properties": [
+     { "key": "inputType",    "value": "textbox" },
+     { "key": "variableName", "value": "topic" }
+   ]
+   // WRONG — silently dropped at parse time, flow won't run:
+   "properties": [
+     { "name": "inputType",    "value": "textbox" },
+     { "name": "variableName", "value": "topic" }
+   ]
+   ```
+   The script's lint will reject/auto-rewrite `{name,value}` entries, but emit
+   the right shape from the start.
 
 ## Procedure
 
@@ -131,7 +155,10 @@ values and property names from the live schema. Remember property placement:
 `ifElse.condition`, split/join `mode`, scriptTask `scriptFormat`/`script`, and
 `timeout`/`retry`/`loop` live at the **node top-level**, not in `properties[]`.
 Generate a fresh UUID for the process `key`. Give every node a unique `key` and
-reasonable `loc`.
+`loc` with **at least 280 px between sequential nodes horizontally** (and ±70–120
+vertical offset for branches) — tighter spacing produces a cramped, unreadable
+diagram. Use the `{ "key": ..., "value": ... }` property shape per hard rule 8,
+never `{"name", "value"}`.
 
 ### 4. Validate (mandatory)
 Pick the strongest validation available in the current context:
