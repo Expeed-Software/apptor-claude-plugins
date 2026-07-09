@@ -8,7 +8,7 @@ Micronaut's canonical OpenTelemetry path is its **first-party `micronaut-tracing
 
 In practice:
 
-- **Default: the Micronaut OTel modules** (`micronaut-tracing-opentelemetry-http`, `micronaut-tracing-opentelemetry-annotation`, `micronaut-tracing-opentelemetry-exporter-otlp`). They auto-instrument the Micronaut HTTP server, declarative HTTP client, Kafka, gRPC, JMS, R2DBC, and the `@NewSpan`/`@ContinueSpan`/`@WithSpan` annotations. Configuration lives in `application.yml`. Works in JIT and GraalVM native image modes.
+- **Default: the Micronaut OTel modules** (`micronaut-tracing-opentelemetry-http`, `micronaut-tracing-opentelemetry-annotation`) plus the OTLP exporter (`io.opentelemetry:opentelemetry-exporter-otlp`). They auto-instrument the Micronaut HTTP server, declarative HTTP client, Kafka, gRPC, JMS, R2DBC, and the `@NewSpan`/`@ContinueSpan`/`@WithSpan` annotations. Configuration lives in `application.yml`. Works in JIT and GraalVM native image modes.
 - **Exception: the javaagent** — pick this only when you need broad coverage of a non-Micronaut library that doesn't have a Micronaut module (e.g., a niche JDBC driver, a legacy library you can't replace). Mixing is supported; the agent backs off where the SDK is configured.
 
 ## 2. Dependency declaration
@@ -42,15 +42,22 @@ Pinned to Micronaut 4.7.x and OTel SDK `1.43.0` / instrumentation BOM `2.10.0` a
     <scope>compile</scope>
   </dependency>
   <dependency>
-    <groupId>io.micronaut.tracing</groupId>
-    <artifactId>micronaut-tracing-opentelemetry-exporter-otlp</artifactId>
+    <groupId>io.opentelemetry</groupId>
+    <artifactId>opentelemetry-exporter-otlp</artifactId>
     <scope>compile</scope>
   </dependency>
-  <!-- Optional: logs over OTLP (Logback bridge) -->
+  <!-- Logs over OTLP (Logback bridge) — see Section 7 -->
   <dependency>
     <groupId>io.opentelemetry.instrumentation</groupId>
     <artifactId>opentelemetry-logback-appender-1.0</artifactId>
     <version>2.10.0</version>
+  </dependency>
+  <!-- provided so the appender install() call compiles; Micronaut supplies
+       logback at runtime -->
+  <dependency>
+    <groupId>ch.qos.logback</groupId>
+    <artifactId>logback-classic</artifactId>
+    <scope>provided</scope>
   </dependency>
 </dependencies>
 ```
@@ -63,10 +70,13 @@ dependencies {
 
     implementation("io.micronaut.tracing:micronaut-tracing-opentelemetry-http")
     implementation("io.micronaut.tracing:micronaut-tracing-opentelemetry-annotation")
-    implementation("io.micronaut.tracing:micronaut-tracing-opentelemetry-exporter-otlp")
+    implementation("io.opentelemetry:opentelemetry-exporter-otlp")
 
-    // Optional log bridge
+    // Log bridge (see Section 7). compileOnly logback so the appender
+    // install() call compiles — the appender extends a logback-core class,
+    // and Micronaut ships logback only at runtime by default.
     implementation("io.opentelemetry.instrumentation:opentelemetry-logback-appender-1.0:2.10.0")
+    compileOnly("ch.qos.logback:logback-classic")
 }
 ```
 
@@ -78,9 +88,12 @@ dependencies {
 
     implementation "io.micronaut.tracing:micronaut-tracing-opentelemetry-http"
     implementation "io.micronaut.tracing:micronaut-tracing-opentelemetry-annotation"
-    implementation "io.micronaut.tracing:micronaut-tracing-opentelemetry-exporter-otlp"
+    implementation "io.opentelemetry:opentelemetry-exporter-otlp"
 
+    // Log bridge (see Section 7). compileOnly logback so the appender
+    // install() call compiles; Micronaut provides logback at runtime.
     implementation "io.opentelemetry.instrumentation:opentelemetry-logback-appender-1.0:2.10.0"
+    compileOnly "ch.qos.logback:logback-classic"
 }
 ```
 
@@ -88,7 +101,9 @@ Versions of the three Micronaut OTel modules are managed by the Micronaut Tracin
 
 ## 3. SDK init / config block (idiomatic, checked-in)
 
-Micronaut reads `application.yml` (or `.properties`). The `otel` tree below is honored by `micronaut-tracing-opentelemetry-*`. Like every other framework in this guide, **only the placeholder** appears here — never the real key.
+Micronaut reads `application.yml` (or `.properties`). Its OpenTelemetry integration is driven by the **OpenTelemetry Autoconfigure SDK**, so the `otel` tree below uses the *autoconfigure* property names — the exporter is selected explicitly with `otel.traces.exporter`, `headers` is a single `"key=value"` string (not a nested map), the sampler is a string, and `resource.attributes` is a comma-separated string. This exact block is **validated end-to-end against ObserveKit** (traces *and* logs land). Like every other framework in this guide, **only the placeholder** appears here — never the real key.
+
+> Common mistake this replaces: a nested `otel.exporter.otlp.headers:` map, `otel.exporter.otlp.enabled`, `otel.traces.sampler.type`/`probability`, and `otel.instrumentation.http…` keys are **not** read by the autoconfigure SDK. If `otel.traces.exporter: otlp` is missing, no span exporter is created and nothing ships — silently, with no error.
 
 `src/main/resources/application.yml`:
 
@@ -100,33 +115,29 @@ micronaut:
 otel:
   service:
     name: ${micronaut.application.name}
+  traces:
+    exporter: otlp          # REQUIRED — selects the OTLP span exporter
+    sampler: always_on      # full sampling in dev; parentbased_traceidratio in prod (Section 8)
+  logs:
+    exporter: otlp          # ship logs over OTLP /v1/logs (also needs the appender install — Section 7)
+  metrics:
+    exporter: none          # flip to otlp only if you actually export metrics
   exporter:
     otlp:
-      enabled: true
-      protocol: http/protobuf
       endpoint: https://observekit-api.expeed.com
-      headers:
-        X-API-Key: ${OBSERVEKIT_API_KEY}
-        # Alternative: Authorization: Bearer ${OBSERVEKIT_API_KEY}
-      timeout: 10s
-      compression: gzip
-  traces:
-    sampler:
-      type: parentbased_traceidratio
-      probability: 1.0       # full sampling in dev; lower in prod (see Section 8)
+      protocol: http/protobuf
+      headers: "X-API-Key=${OBSERVEKIT_API_KEY}"
+      # Alternative: headers: "Authorization=Bearer ${OBSERVEKIT_API_KEY}"
+      compression: gzip     # ObserveKit's OTLP receiver decompresses gzip
+      timeout: 10000        # milliseconds
   resource:
-    attributes:
-      service.namespace: ${OBSERVEKIT_NAMESPACE:default}
-      deployment.environment: ${OBSERVEKIT_ENV:dev}
-  instrumentation:
-    http:
-      server:
-        exclude-paths: /health,/readiness,/liveness,/metrics
-  http:
-    server:
-      enabled: true
-    client:
-      enabled: true
+    attributes: "service.namespace=${OBSERVEKIT_NAMESPACE:default},deployment.environment=${OBSERVEKIT_ENV:dev}"
+  # URI patterns to keep out of tracing (probes, scrape endpoints).
+  exclusions:
+    - /health
+    - /readiness
+    - /liveness
+    - /metrics
 ```
 
 Notes:
@@ -337,6 +348,35 @@ implementation "io.opentelemetry.instrumentation:opentelemetry-logback-appender-
 
 The Micronaut OTel module populates the `trace_id` / `span_id` MDC keys automatically while a span is current.
 
+**Required with no javaagent — install the appender.** Because this guide runs without the OTel javaagent, the Logback `OpenTelemetryAppender` above has no SDK to emit through until the app installs one. Micronaut does **not** do this automatically, so log records buffer and are then dropped — the tell in the logs is `numLogsCapturedBeforeOtelInstall value of the OpenTelemetry appender is too small`. Install the SDK once at startup:
+
+```java
+package com.example;
+
+import io.micronaut.context.event.ApplicationEventListener;
+import io.micronaut.runtime.server.event.ServerStartupEvent;
+import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender;
+import jakarta.inject.Singleton;
+
+@Singleton
+public class OpenTelemetryLogbackInstaller implements ApplicationEventListener<ServerStartupEvent> {
+
+    private final OpenTelemetry openTelemetry;
+
+    public OpenTelemetryLogbackInstaller(OpenTelemetry openTelemetry) {
+        this.openTelemetry = openTelemetry;
+    }
+
+    @Override
+    public void onApplicationEvent(ServerStartupEvent event) {
+        OpenTelemetryAppender.install(openTelemetry);
+    }
+}
+```
+
+This install step, together with `otel.logs.exporter: otlp` (Section 3), is what actually makes logs reach ObserveKit — both are validated end-to-end. Traces do not need it. (With the javaagent, the agent installs the appender for you — but then you don't need the compile-time modules; pick one.)
+
 ### Strategy A' — Log4j2 variant
 
 If you've swapped Logback for Log4j2 via `micronaut-logging-log4j2`:
@@ -381,13 +421,14 @@ Drop the OTel appender entirely; let your existing log shipper (Fluent Bit, Vect
 ```yaml
 otel:
   traces:
-    sampler:
-      type: parentbased_traceidratio
-      probability: 0.25
-  instrumentation:
-    http:
-      server:
-        exclude-paths: /health,/readiness,/liveness,/metrics
+    exporter: otlp
+    sampler: parentbased_traceidratio
+    sampler.arg: "0.25"
+  exclusions:
+    - /health
+    - /readiness
+    - /liveness
+    - /metrics
 ```
 
 ### Env-var / system-property override (works everywhere)
