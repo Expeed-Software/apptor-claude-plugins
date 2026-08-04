@@ -263,6 +263,10 @@ These are the endpoints a SaaS app calls at **customer-onboarding time** (Model 
 
 **`Realm` DTO fields:** `realmName` (NOT `name`), `authDomain`, `accountId`, `productOwnerRefId`, `defaultPasswordPolicy` (required on create), `passwordMinLength`, `passwordRequiresNumber`, `passwordRequiresSpecialChar`, `passwordRequiresUpperCase`, `passwordRequiresLowerCase`.
 
+> **Allowed characters (validated server-side — build your forms to match):**
+> - **`authDomain`** — letters, digits, and hyphens only (`^[a-zA-Z0-9-]+$`). It is the subdomain label (e.g. `acme-corp`), so hyphens are valid; do not restrict it to alphanumerics.
+> - **Password** (when `passwordRequiresSpecialChar` is enabled) — the "special character" set is `!@#$%^&*()-_+=[]{}|;:,.<>?/~`. A password may contain **only** letters, digits, and those characters; any other character (double/single quote, backtick, backslash, whitespace, unicode) is rejected server-side with a message naming the offending character.
+
 ### App Client
 
 | Method | Path | Auth | Notes |
