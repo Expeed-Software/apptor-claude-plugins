@@ -178,6 +178,8 @@ curl -X POST https://{realm-url}/oidc/token \
   -d "code={authorization-code}"
 ```
 
+If the IdP connection has `returnProviderTokens=true`, the response ALSO includes a `provider_tokens` object carrying the external provider's own `access_token`/`id_token` (so your backend can call that provider's APIs as the user). This requires the app client to authenticate with **S256 PKCE or a client secret** — plain/no PKCE is rejected. The provider refresh token is never returned inline (it stays server-side).
+
 ### Grant Type: client_credentials (admin API token)
 
 ```bash
@@ -218,6 +220,26 @@ curl -X POST https://{realm-url}/oidc/token \
   -d "client_secret={string}"
 ```
 
+### Grant Type: token-exchange (RFC 8693 — get/refresh a provider token)
+
+Exchange an Apptor ID token for the **external provider's** token held in the vault (requires the IdP connection's `storeProviderTokens=true`). The provider token is auto-refreshed if expired — you never call a separate refresh endpoint.
+
+```bash
+curl -X POST https://{realm-url}/oidc/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+  -d "subject_token={apptorID access or refresh token}" \
+  -d "subject_token_type=urn:ietf:params:oauth:token-type:access_token" \
+  -d "idp_connection_id={idpConnectionId}" \
+  -d "client_id={uuid}" \
+  -d "client_secret={string}"
+```
+
+- **Confidential client:** send `client_id`+`client_secret`; `subject_token` = Apptor ID **access** token; `subject_token_type=urn:ietf:params:oauth:token-type:access_token`.
+- **Public client:** no secret; `subject_token` = Apptor ID **refresh** token; `subject_token_type=urn:ietf:params:oauth:token-type:refresh_token`.
+- Returns `{ "access_token": "<provider token — fresh>", "issued_token_type": "urn:apptorid:oauth:token-type:provider-token", "token_type": "Bearer", "expires_in": <int> }`.
+- The user is resolved from the validated `subject_token`, never a parameter — you cannot request another user's provider token.
+
 ---
 
 ## Onboarding / Admin API (realm, app client, URLs, IdP, access keys, RBAC)
@@ -254,7 +276,7 @@ These are the endpoints a SaaS app calls at **customer-onboarding time** (Model 
 | POST | `app-clients/{appClientId}/resource-servers/{resourceServerName}` | M+R | Link one RS **by name** |
 | PUT | `app-clients/{appClientId}/resource-servers` | M+R | Replace all RS links; body = `List<String>` of names |
 
-**`AppClient` DTO fields:** `name`, `appType` (`spa`/`web`/`mobile`/`m2m`), `realmId`, `idpClient` (**always send `false`**), `multiTenant` (**always send `false`** — no-op server-side), `accessTokenExpirationInMin`, `idTokenExpirationInMin`, `refreshTokenExpirationInDays`, `requiresMfa`, `resourceServerNames`, `passwordTokenExpiryInSeconds`, `otpValidityInSeconds`.
+**`AppClient` DTO fields:** `name`, `appType` (`spa`/`web`/`mobile`/`m2m`), `realmId`, `idpClient` (**always send `false`**), `multiTenant` (**always send `false`** — no-op server-side), `accessTokenExpirationInMin`, `idTokenExpirationInMin`, `refreshTokenExpirationInDays`, `requiresMfa`, `resourceServerNames`, `passwordTokenExpiryInSeconds`, `otpValidityInSeconds`, `maxConcurrentSessions` (optional cap on concurrent login/refresh-token sessions a single user may hold with this client; leave blank or `0` for unlimited — when a positive cap is exceeded the oldest session is evicted).
 
 ### App URLs
 
@@ -279,7 +301,12 @@ These are the endpoints a SaaS app calls at **customer-onboarding time** (Model 
 | PUT | `app-clients/{clientId}/idp-connections/{idpConnectionId}` | M+R | |
 | DELETE | `app-clients/{clientId}/idp-connections/{idpConnectionId}` | M+R | |
 
-**`IdpConnection` DTO fields:** `providerId` (`local`/`google`/`microsoft`), `clientId` (the EXTERNAL provider's OAuth client id), `clientSecret` (external secret), `issuerUrl`, `metadataUrl`, `grantType`, `authUrl`. See "Identity Provider Configuration" for required-field rules and the Microsoft tenant URL handling.
+**`IdpConnection` DTO fields:** `providerId` (`local`/`google`/`microsoft`), `clientId` (the EXTERNAL provider's OAuth client id), `clientSecret` (external secret), `issuerUrl`, `metadataUrl`, `grantType`, `authUrl`, `returnProviderTokens` (bool, default `false`), `storeProviderTokens` (bool, default `false`), `providerScopes` (space-delimited extra scopes to request from the external provider). See "Identity Provider Configuration" for required-field rules and the Microsoft tenant URL handling.
+
+> **Provider token vault (optional, opt-in).** `returnProviderTokens`/`storeProviderTokens` let your backend obtain the *external* provider's own token (e.g. call Google/Microsoft APIs as the user):
+> - `returnProviderTokens` → the provider token comes back inline in the `authorization_code` `/oidc/token` response (see Token Endpoint; requires S256 PKCE or a client secret).
+> - `storeProviderTokens` → the provider token is stored encrypted and retrieved/auto-refreshed later via the **token-exchange** grant. Enabling this AUTO-requests a provider refresh token — you do **not** add `offline_access` yourself.
+> - `providerScopes` is only needed to request extra *provider API* scopes (e.g. `https://www.googleapis.com/auth/calendar.readonly`); it is admin-set on the connection and never passed by the login app.
 
 ### Access Keys
 
@@ -565,6 +592,8 @@ apptorID currently supports three identity providers per app client: `local` (us
 | `google` | `externalClientId`, `externalClientSecret` | |
 
 The MCP tool `apptorID_add_idp_connection` rejects the call with `IllegalArgumentException` if a required field is missing for `microsoft` or `google`. For Microsoft, the server builds `issuerUrl` / `metadataUrl` from the supplied `tenantId` (or `common` if omitted), so there is no `{tenantid}`-style placeholder in the stored value. The tool's response includes the resolved `issuerUrl` and `metadataUrl`.
+
+**Optional vault fields (any external `microsoft`/`google`/OIDC provider):** `returnProviderTokens`, `storeProviderTokens`, `providerScopes` — see the "Provider token vault" note under `IdpConnection` DTO fields. Use them only when your backend needs the external provider's own token (e.g. call the provider's APIs as the user); omit them for plain SSO.
 
 ### Redirect URI to register in Azure / Google
 

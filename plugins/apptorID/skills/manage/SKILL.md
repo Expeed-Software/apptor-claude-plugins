@@ -224,6 +224,16 @@ The response now includes the resolved `issuerUrl` and `metadataUrl` — verify 
 
 **For `providerId: "local"`:** No external fields. Just `clientId` + `providerId: "local"`.
 
+**Provider token vault fields (optional — any external provider):**
+
+| Field | Required? | Notes |
+|---|---|---|
+| `returnProviderTokens` | optional (default `false`) | Return the external provider's own access/id token inline in the `/oidc/token` login response. Requires the app client to authenticate with **S256 PKCE or a client secret**. |
+| `storeProviderTokens` | optional (default `false`) | Persist the provider's tokens encrypted so your backend can retrieve/refresh them later via the **token-exchange** grant. Enabling this AUTO-requests a provider refresh token — do **not** add `offline_access` yourself. |
+| `providerScopes` | optional | Space-delimited extra scopes to request from the provider (e.g. `https://www.googleapis.com/auth/calendar.readonly`). Only needed to call the provider's own APIs; omit for plain SSO. |
+
+Use these only when your app needs the *external provider's* token (e.g. to call Google/Microsoft APIs as the user). For plain sign-in, leave them unset. Retrieve a stored token later with `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` (`subject_token` + `idp_connection_id`) — it comes back fresh, auto-refreshed.
+
 **Redirect URI to register in Azure / Google:**
 
 This URI must be added to your Azure app registration ("Web → Redirect URIs") or Google OAuth client ("Authorized redirect URIs") BEFORE the social login flow will work. apptorID does NOT return this URI in the `add_idp_connection` response. Use:

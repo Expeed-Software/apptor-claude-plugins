@@ -198,12 +198,45 @@ Response:
 {
   "access_token": "new-eyJhbGci...",
   "id_token": "new-eyJhbGci...",
-  "refresh_token": "new-rt-...",    ← always reissued, but the OLD one is NOT invalidated
+  "refresh_token": "new-rt-...",    ← always reissued; the presented (old) token is single-use and is revoked on rotation
   "expires_in": 3600
 }
 ```
 
-> **Refresh token behavior:** every refresh mints a NEW refresh token, but the server does NOT revoke the old one — both stay valid until each expires or is explicitly revoked. This is reuse-tolerant, not RFC-compliant rotation. To invalidate a refresh token, call `POST /oidc/revoke`, or `GET /oidc/logout` (which revokes the session's tokens). Don't rely on a refresh implicitly killing the prior token.
+> **Refresh token behavior (single-use rotation + reuse detection):** every refresh mints a NEW refresh token AND atomically revokes the one you presented — a refresh token can be spent exactly once. Store only the newest refresh token and drop the old one immediately. Replaying an already-rotated (revoked) token is treated as compromise: the server revokes the entire **session family** (every token descended from that login) and rejects the request with `invalid_grant`.
+>
+> Each fresh login starts its own family, so the same user can hold multiple concurrent sessions with the same app client (different devices/browsers) — bounded by the app client's optional `maxConcurrentSessions` cap (the least-recently-used session is evicted when the cap is exceeded). A password change or account deactivation revokes ALL of the user's refresh tokens. You can still explicitly revoke via `POST /oidc/revoke` or `GET /oidc/logout` (logout ends every session for that user + app client).
+
+## Provider Tokens (RFC 8693 Token Exchange)
+
+Distinct from the code→token exchange above. When an IdP connection has `returnProviderTokens` / `storeProviderTokens` enabled, apptorID can hand your backend the **external provider's own** token (e.g. to call Google/Microsoft APIs as the user).
+
+- **Inline at login** (`returnProviderTokens`): the `authorization_code` `/oidc/token` response also carries a `provider_tokens` object (`access_token`, `id_token`, `expires_in`, `scope`). Requires the app client to use **S256 PKCE or a client secret**. The provider refresh token is never returned inline.
+- **On demand + auto-refreshed** (`storeProviderTokens`): retrieve the stored provider token via RFC 8693 token exchange — always returned fresh (refreshed server-side if expired):
+
+```
+POST {realm}/oidc/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+&subject_token={apptorID access OR refresh token}
+&subject_token_type=urn:ietf:params:oauth:token-type:access_token   # or ...:refresh_token
+&idp_connection_id={idpConnectionId}
+&client_id={id}
+&client_secret={secret}   # confidential clients only
+
+Response:
+{
+  "access_token": "<provider token — fresh>",
+  "issued_token_type": "urn:apptorid:oauth:token-type:provider-token",
+  "token_type": "Bearer",
+  "expires_in": 3600
+}
+```
+
+- **Confidential client:** send `client_id`+`client_secret`; `subject_token` = apptorID **access** token; type `...:access_token`.
+- **Public client:** no secret; `subject_token` = apptorID **refresh** token; type `...:refresh_token`.
+- The user is resolved from the validated `subject_token`, never a parameter — you cannot request another user's token. Refresh is automatic; enabling `storeProviderTokens` requests the provider refresh token for you (no manual `offline_access`).
 
 ## JWT Token Claims
 
