@@ -67,7 +67,6 @@ If no `reset_password` URL is registered for the app client, apptorID builds res
 2. **Read API spec** — `references/apptorID-api-spec.md` (the forgot-password and reset-password sections)
 3. **Register app URLs FIRST (own reset page only)** — via MCP (`apptorID_add_app_urls`):
    - `reset_password` → the URL of the reset page you're about to build (e.g., `https://myapp.com/reset-password`)
-   - `post_reset_password` → where to redirect after successful reset (e.g., `https://myapp.com/login`)
    **URLs must be registered BEFORE triggering forgot-password, otherwise the email link will be wrong.** Skip this when using the hosted reset page.
 4. **Build forgot-password endpoint** —
    - Mode 1: backend calls the public forgot-password API
@@ -102,7 +101,7 @@ Saving a `reset_password` template without `{{password_reset_url}}`, `{{user_nam
 
 Register via MCP (`apptorID_add_app_urls`):
 - `reset_password` → URL where user lands from email link (e.g., `https://myapp.com/reset-password`)
-- `post_reset_password` → URL to redirect after successful reset (e.g., `https://myapp.com/login`)
+- `post_reset_password` is accepted but nothing in apptorID reads it, so don't register it; your reset page decides where to go after success.
 
 ## Credential Security (HARD RULES)
 
@@ -142,13 +141,13 @@ Content-Type: application/json
 }
 ```
 
-5. On success, redirect to the registered `post_reset_password` URL
+5. On success, redirect to the app's login page
 
 ## Key Details
 
 - The public forgot-password endpoint requires NO authentication — just call it with appClientId and userName in the path
 - The reset page is either apptorID's hosted one (`https://{realm-authDomain}/hosted-login/?token=...&client_id=...`) or a frontend page in the developer's app
-- Forgot-password by username returns 400 for a federated user (Google/Microsoft); they sign in with their identity provider, so show that message instead of "email sent"
+- Google/Microsoft (federated) users have no apptorID password. The `/secured` forgot-password route returns 400 for them, so show "sign in with your identity provider". The public route returns 400 on older servers and a silent 200 after the admin-API fix release, so never treat its response as proof the account exists
 - `/reset-password` reads only `token`, `password` and `appClientId`; the user comes from the token. The token is single-use, but a password that fails policy does not consume it
 
 ## Reference Files

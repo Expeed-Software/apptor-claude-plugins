@@ -57,9 +57,12 @@ public class ApptorClientFactory {
 }
 ```
 
+Both clients take the **full base URL including `https://`** (e.g. `https://acme.sandbox.auth.apptor.io`); they fetch `/.well-known/openid-configuration` from it. A bare host fails. `AuthServerAdminClient` can use the master URL; `OidcClient` uses the tenant's realm URL.
+
 `OidcClient(authDomain, clientId, clientSecret)` — per app client:
 - `retrieveBearerTokensFromAuthorizationCode(code)`, `retrieveBearerTokensFromRefreshToken(refreshToken)`
-- `revokeToken(token, resourceServerId)`, `getUserInfo(accessToken)`
+- `getUserInfo(accessToken)`
+- **Do not use `revokeToken`**: in every SDK version up to 0.97 it posts to `/oidc/token` instead of `/oidc/revoke`, so it revokes nothing. Revoke over HTTP: `POST {realmUrl}/oidc/revoke` with `refresh_token` and `token_type_hint=refresh_token`.
 - `retrieveBearerTokensFromPassword(...)`, `retrieveBearerTokensFromOtp(...)`
 
 `AuthServerAdminClient(authDomain, accessKeyId, accessKeySecret)` — admin operations with an access key:
@@ -68,7 +71,7 @@ public class ApptorClientFactory {
 - Email/SMS config and templates
 - App-sent notifications: `getForgotPasswordToken(appClientId, userName, true)`, `getResendInvitationToken(appClientId, userName, true)` and the `...ByPhone` variants return the token/OTP instead of apptorID sending it
 
-Not in the SDK — call over HTTP: `POST /oidc/pre-authorize`, the `/oidc/auth` browser redirect, and `POST /reset-password`.
+Not in the SDK (or broken there) — call over HTTP: `POST /oidc/pre-authorize`, the `/oidc/auth` browser redirect, `POST /oidc/revoke`, and `POST /reset-password`.
 
 This list can lag the SDK version. After the dependency resolves, confirm the real signatures with `javap -cp <apptor-authserver-sdk-java jar> io.apptor.authserver.client.AuthServerAdminClient io.apptor.authserver.client.OidcClient` and code against that output.
 

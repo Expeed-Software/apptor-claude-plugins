@@ -115,7 +115,7 @@ Tool: apptorID_add_app_urls
 | `login` | `https://{authDomain}/hosted-login/` for hosted login, OR app's login page URL | MANDATORY |
 | `logout` | App's home page or login page | MANDATORY for logout flow |
 | `reset_password` | App's own reset password page (e.g., `/reset-password`). If unregistered, links fall back to the hosted reset page `https://{authDomain}/hosted-login/`. | Only if the app has its own reset page |
-| `post_reset_password` | Where to redirect after successful password reset (e.g., `/login`) | Needed for forgot-password flow |
+| `post_reset_password` | Accepted, but nothing in apptorID reads it, so don't register it | Not needed |
 
 > **Note:** Any other URL type (including uppercase like `LOGIN`) is rejected with 400.
 
@@ -212,7 +212,7 @@ Tool: apptorID_add_idp_connection
 |---|---|---|
 | `externalClientId` | **MANDATORY** | The Application (client) ID from your Azure app registration |
 | `externalClientSecret` | **MANDATORY** | The client secret value from Azure (not the secret ID) |
-| `issuerUrl` | optional | Defaults to the multi-tenant `https://login.microsoftonline.com/common/v2.0`. For a single Azure tenant pass `https://login.microsoftonline.com/{tenantId}/v2.0`. There is no `tenantId` parameter. |
+| `issuerUrl` | optional (MCP) | Defaults to the multi-tenant `https://login.microsoftonline.com/common/v2.0`. For a single Azure tenant pass `https://login.microsoftonline.com/{tenantId}/v2.0`. There is no `tenantId` parameter. |
 | `metadataUrl` | optional | Defaults to the `common` `/.well-known/openid-configuration`. For a single tenant pass `https://login.microsoftonline.com/{tenantId}/v2.0/.well-known/openid-configuration`. |
 
 The response does not include the issuer/metadata URLs — check them with `apptorID_get_idp_connections`.

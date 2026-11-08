@@ -299,7 +299,7 @@ When registering URLs for an app client (via Admin UI or MCP tools):
 | `login` | Tenant's login page URL (for client-hosted login) |
 | `logout` | Post-logout redirect URL |
 | `reset_password` | Password reset page URL |
-| `post_reset_password` | Where to redirect after password reset |
+| `post_reset_password` | Accepted but unused by apptorID |
 
 ## Hosted Login — URL Registration + Fallback
 
@@ -310,7 +310,7 @@ apptorID's hosted login page is at: `https://{realm-domain}/hosted-login/`
 - `/oidc/auth?provider_id=local` falls back to the realm's hosted SPA `https://{realm-domain}/hosted-login/` (not for `idpClient` app clients, which must register a login URL).
 - Reset and welcome email links fall back to the hosted SPA when no `reset_password` URL is registered.
 
-`logout` and `post_reset_password` never fall back (they point to customer-owned destinations).
+`logout` never falls back (it points to a customer-owned destination).
 
 Practical consequence: **always register a `login` URL** — `https://{realm-domain}/hosted-login/` for hosted login, or the app's own page. Customer-registered URLs always win over the fallback. MCP `full_setup` registers only the redirect URLs, plus any login/logout URLs you pass it.
 

@@ -89,7 +89,7 @@ Use the **same created realm URL** for user management calls.
 4. **Read reference** — read `references/apptorID-api-spec.md` first, then the stack-specific reference file's admin API section
 5. **Build admin client** — service that acquires admin token, caches it, makes API calls
 6. **Build endpoints** — user CRUD routes using the admin client
-7. **Build set-password page (only if the user wants their own UI)** — frontend page where new users land from the welcome email to set their password. Register the page URL as `reset_password` type via MCP (`apptorID_add_app_urls`). Also register `post_reset_password` redirect URL. Otherwise skip: the hosted reset page handles it. See "Set-Password Page" section below for details.
+7. **Build set-password page (only if the user wants their own UI)** — frontend page where new users land from the welcome email to set their password. Register the page URL as `reset_password` type via MCP (`apptorID_add_app_urls`). Otherwise skip: the hosted reset page handles it. See "Set-Password Page" section below for details.
 8. **Wire orgRefId/userRefId** — create-user endpoint accepts the developer's org/user IDs and passes them as orgRefId/userRefId
 9. **Wire credentials** — add access_key_id/secret to backend config in the apptorID section
 10. **Test and review**
@@ -131,11 +131,10 @@ Content-Type: application/json
 }
 ```
 
-3. On success, redirects to the login page (the registered `post_reset_password` URL)
+3. On success, redirects to the app's login page
 
 **Register via MCP (`apptorID_add_app_urls`):**
 - `reset_password` → URL of this page (e.g., `https://myapp.com/set-password`)
-- `post_reset_password` → redirect after success (e.g., `https://myapp.com/login`)
 
 ## orgRefId / userRefId Wiring
 

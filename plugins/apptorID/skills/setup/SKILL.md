@@ -219,7 +219,6 @@ Register via MCP (`apptorID_add_app_urls`) or HTTP (`POST /app-clients/{clientId
 | `redirect` | Your app's OAuth callback URL (e.g., `https://myapp.com/auth/callback`) | Before first login test |
 | `logout` | Where to redirect after logout (e.g., `https://myapp.com/`) | Before first logout test |
 | `reset_password` | Only if the app has its own reset page (e.g., `https://myapp.com/reset-password`). Unregistered → links use the hosted reset page | If forgot-password with own page is planned |
-| `post_reset_password` | Where to redirect after password reset (e.g., `https://myapp.com/login`) | If forgot-password is planned |
 
 ### Hosted-login fallback — understand this before debugging
 
@@ -227,7 +226,7 @@ When no `login` / `reset_password` URL is registered, the server falls back to t
 - **Email links** (reset, welcome, login link in emails) — `UserExternalService.getUrl`
 - **`/oidc/auth?provider_id=local`** — skipped for `idpClient` apps
 
-A plain `/oidc/auth` (no `provider_id`) does NOT fall back: it fails with `no_login_url_registered`. `logout` and `post_reset_password` never fall back (they throw if missing).
+A plain `/oidc/auth` (no `provider_id`) does NOT fall back: it fails with `no_login_url_registered`. `logout` never falls back (it throws if missing).
 
 Consequences:
 - Seeing the hosted login page during a test does NOT mean your code is wrong — it usually means you didn't register your `login` URL yet.

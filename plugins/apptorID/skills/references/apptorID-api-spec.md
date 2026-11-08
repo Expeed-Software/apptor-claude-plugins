@@ -280,7 +280,7 @@ These are the endpoints a SaaS app calls at **customer-onboarding time** (Model 
 | GET | `realms/{realmId}/app-clients` | M+R | |
 | GET | `app-clients/{clientId}` | M+R | |
 | DELETE | `app-clients/{appClientId}` | M+R | |
-| POST | `app-clients/{clientId}/reset-secret` | M+R | Rotates secret; new secret in response |
+| POST | `app-clients/{clientId}/reset-secret` | M+R | Rotates secret; new secret in response. **Returns 400 on servers older than the admin-API fix release** — use MCP `apptorID_reset_client_secret` there |
 | POST | `app-clients/{appClientId}/resource-servers/{resourceServerName}` | M+R | Link one RS **by name** |
 | PUT | `app-clients/{appClientId}/resource-servers` | M+R | Replace all RS links; body = `List<String>` of names |
 
@@ -317,6 +317,8 @@ These are the endpoints a SaaS app calls at **customer-onboarding time** (Model 
 
 **`IdpConnection` DTO fields:** `providerId` (`local`/`google`/`microsoft`), `clientId` (the EXTERNAL provider's OAuth client id), `clientSecret` (external secret), `issuerUrl`, `metadataUrl`, `grantType`, `authUrl`, `returnProviderTokens` (bool, default `false`), `storeProviderTokens` (bool, default `false`), `providerScopes` (space-delimited extra scopes to request from the external provider). See "Identity Provider Configuration" for required-field rules and the Microsoft tenant URL handling.
 
+> **Over HTTP, always send `grantType: "authorization_code"`, `issuerUrl` and `metadataUrl`.** Older servers don't default them: without `grantType` the call fails with a database error, and without the URLs the login fails at `/oidc/auth` ("outbound IdP url is null/blank"). Google: `https://accounts.google.com` and `https://accounts.google.com/.well-known/openid-configuration`. Microsoft: `https://login.microsoftonline.com/common/v2.0` (or `/{tenant-id}/v2.0`) and `{issuerUrl}/.well-known/openid-configuration`. The MCP tool fills these in itself.
+
 > **Provider token vault (optional, opt-in).** `returnProviderTokens`/`storeProviderTokens` let your backend obtain the *external* provider's own token (e.g. call Google/Microsoft APIs as the user):
 > - `returnProviderTokens` → the provider token comes back inline in the `authorization_code` `/oidc/token` response (see Token Endpoint; requires S256 PKCE or a client secret).
 > - `storeProviderTokens` → the provider token is stored encrypted and retrieved/auto-refreshed later via the **token-exchange** grant. Enabling this AUTO-requests a provider refresh token — you do **not** add `offline_access` yourself.
@@ -342,9 +344,9 @@ Resource servers are scoped to the **account**, not the realm (`POST /accounts/{
 | POST / GET | `accounts/{accountId}/resource-servers` | M+R |
 | GET / PUT | `resource-servers/{resourceServerId}` | M+R |
 | POST / GET | `resource-servers/{resourceServerId}/roles` | M+R |
-| PUT / DELETE | `roles/{roleId}` | M+R |
+| PUT / DELETE | `roles/{roleId}` | M+R | DELETE removes the role and its user, access-key and permission assignments; users are kept. Older servers fail on both PUT and DELETE (duplicate key) |
 | POST / GET | `resource-servers/{resourceServerId}/permissions` | M+R |
-| PUT / DELETE | `permissions/{permissionId}` | M+R |
+| PUT / DELETE | `permissions/{permissionId}` | M+R | DELETE removes the permission and its role links. Older servers fail on both PUT and DELETE |
 | POST | `roles/{roleId}/permissions` | M+R |
 | POST | `resource-servers/{resourceServerId}/realms/{realmId}/users/{userName}/roles` | M+R | assign roles to a user |
 | POST | `resource-servers/{resourceServerId}/access-keys/{accessKeyId}/roles` | M+R | assign roles to an access key |
@@ -469,7 +471,9 @@ POST /app-clients/{appClientId}/users/{userName}/forgot-password
 
 **CRITICAL:** The path includes BOTH `appClientId` AND `userName`. Not just email in a body.
 
-There is a `/secured` variant (`POST /app-clients/{appClientId}/users/{userName}/forgot-password/secured`) that requires admin auth (Bearer token) and supports the `appHandlesNotification` query param (returns the reset token in the response instead of sending email, for apps that send their own branded email).
+There is a `/secured` variant (`POST /app-clients/{appClientId}/users/{userName}/forgot-password/secured`) that requires admin auth (Bearer token) and supports the `appHandlesNotification` query param (returns the reset token as a **plain-text** body instead of sending email, for apps that send their own branded email).
+
+**Unknown user:** older servers return 500 `User not found`; after the admin-API fix release the public route returns 200 (no account enumeration) and `/secured` returns 404. Show the same "if the account exists, we sent an email" message for any non-200/400 response. A Google/Microsoft user returns 400 on `/secured`; on the public route, 400 on older servers and a silent 200 after the fix release (unknown, disabled and federated users all look the same).
 
 **What this does:**
 1. Generates a password reset token
@@ -509,7 +513,7 @@ If the developer's app needs to set a password programmatically via HTTP, use th
 The reset link is `{reset page}?token={reset-token}&client_id={app-client-id}`. The reset page is either:
 
 - **apptorID's hosted reset page** — `https://{realm-authDomain}/hosted-login/?token=...&client_id=...`. It validates the token, enforces the realm's password policy and sets the password. If no `reset_password` URL is registered, apptorID builds reset and welcome email links against this page automatically.
-- **The app's own page** — register it first, then the page reads `token` and `client_id`, shows a "new password" form, calls `POST /reset-password`, and on success redirects to the `post_reset_password` URL.
+- **The app's own page** — register it first, then the page reads `token` and `client_id`, shows a "new password" form, calls `POST /reset-password`, and on success redirects to the app's login page.
 
 **The reset token is opaque — never decode it.** Treat it as a random string: no username, expiry or client id can be read from it. To show the user's name or check the link before showing the form, call:
 
@@ -525,7 +529,8 @@ No auth. Always HTTP 200; the body says whether the link is usable:
 
 **App URL types to register via MCP (`apptorID_add_app_urls`), own page only:**
 - `reset_password` → `https://myapp.com/reset-password`
-- `post_reset_password` → `https://myapp.com/login`
+
+`post_reset_password` is accepted but nothing in apptorID reads it, so don't register it.
 
 ## Who Sends Notification Emails
 
@@ -579,6 +584,10 @@ Query params: `client_id`, `redirect_uri`, `scope`, `response_type=code`, `state
 
 Returns `{ "preAuthToken": "...", "state": "...", "expiresIn": 60 }`. The `preAuthToken` is passed to `/oidc/auth?...&preAuthToken={token}` to skip the login page. The token is single-use and expires after 60 seconds.
 
+- `scope` must contain `openid` here **and** on `/oidc/auth`; both return 400 without it.
+- An unregistered `redirect_uri` returns 400 `invalid_redirect_url`. Matching ignores case but not `http` vs `https` or a trailing `/`.
+- Credential failures are always 401: `{"error":"invalid_credentials"}` (wrong password, disabled user, Google/Microsoft-only user) or `{"error":"password_setup_incomplete"}` (user has not set a password yet). There is no 403 or 429.
+
 > **`pre-authorize` is for the LOCAL identity provider only.** For Microsoft / Google / other IdP-based logins, do NOT call `pre-authorize`. Instead, redirect the user's browser directly to `GET /oidc/auth?...&provider_id={microsoft|google}` and let apptorID hand off to the upstream IdP. Trying to "pre-authorize" a social login will not work — there are no local credentials to validate.
 
 ### Logout
@@ -599,6 +608,8 @@ Content-Type: application/x-www-form-urlencoded
 
 refresh_token={token}&token_type_hint=refresh_token
 ```
+
+Send both parameters: older servers reject a request without `token_type_hint` with a Java error message. The parameter is `refresh_token`, not RFC 7009's `token`. An unknown token returns 200.
 
 ### JWKS (public keys for JWT verification)
 
@@ -675,7 +686,7 @@ Register via MCP (`apptorID_add_app_urls`):
 | `logout` | Post-logout redirect | `https://myapp.com/` |
 | `redirect` | OAuth callback URL | `https://myapp.com/auth/callback` |
 | `reset_password` | The app's own password reset page. If unregistered, links use the hosted reset page | `https://myapp.com/reset-password` |
-| `post_reset_password` | Redirect after password reset | `https://myapp.com/login` |
+| `post_reset_password` | Accepted but unused by apptorID; don't register it | — |
 
 ---
 
@@ -698,7 +709,7 @@ There is no `realm_id` claim.
 3. **The hosted login HAS a reset password page.** Build your own only for custom UI, and register it as `reset_password`.
 4. **NEVER call forgot-password without `appClientId` in the path.** The endpoint is `/app-clients/{appClientId}/users/{userName}/forgot-password`.
 5. **ALWAYS use the created realm URL** for integration code, not the master URL.
-6. **ALWAYS register app URLs** (`redirect`, `login`, `logout`, plus `reset_password`/`post_reset_password` when the app has its own reset page) before the flows that need them.
+6. **ALWAYS register app URLs** (`redirect`, `login`, `logout`, plus `reset_password` when the app has its own reset page) before the flows that need them.
 7. **User endpoints use `{userName}` in the path**, not a UUID. userName is typically the email.
 8. **ALWAYS pass `externalClientId` / `externalClientSecret` to `apptorID_add_idp_connection` for microsoft/google** — the tool does not reject them missing; login fails later instead. For a single Microsoft tenant, pass tenant-specific `issuerUrl` / `metadataUrl` (default is `common`). Verify with `apptorID_get_idp_connections`.
 9. **NEVER use `pre-authorize` for Microsoft/Google login.** It is local-username/password only. For IdP logins, redirect directly to `/oidc/auth?...&provider_id={microsoft|google}`.
