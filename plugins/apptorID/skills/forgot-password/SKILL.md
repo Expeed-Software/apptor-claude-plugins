@@ -96,7 +96,7 @@ Available in password reset email templates (`reset_password` email type):
 - `{{user_name}}` — the user's username
 - `{{login_url}}` — the login URL
 
-**There is NO server-side validation** of template variables. Missing variables just stay as literal text in the email.
+Saving a `reset_password` template without `{{password_reset_url}}`, `{{user_name}}` and `{{link_expiry}}` is rejected. Unknown variables stay as literal text.
 
 ## App URL Types for Password Reset
 
@@ -148,6 +148,7 @@ Content-Type: application/json
 
 - The public forgot-password endpoint requires NO authentication — just call it with appClientId and userName in the path
 - The reset page is either apptorID's hosted one (`https://{realm-authDomain}/hosted-login/?token=...&client_id=...`) or a frontend page in the developer's app
+- Forgot-password by username returns 400 for a federated user (Google/Microsoft); they sign in with their identity provider, so show that message instead of "email sent"
 - `/reset-password` reads only `token`, `password` and `appClientId`; the user comes from the token. The token is single-use, but a password that fails policy does not consume it
 
 ## Reference Files

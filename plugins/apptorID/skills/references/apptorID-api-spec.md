@@ -288,7 +288,7 @@ These are the endpoints a SaaS app calls at **customer-onboarding time** (Model 
 
 ### App URLs
 
-`UrlType` values: `login`, `logout`, `redirect`, `reset_password`, `post_reset_password`.
+`UrlType` values: `login`, `logout`, `redirect`, `reset_password`, `post_reset_password`. Any other value is rejected with 400, on add and on app-client create/update.
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|

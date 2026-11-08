@@ -117,7 +117,7 @@ Tool: apptorID_add_app_urls
 | `reset_password` | App's own reset password page (e.g., `/reset-password`). If unregistered, links fall back to the hosted reset page `https://{authDomain}/hosted-login/`. | Only if the app has its own reset page |
 | `post_reset_password` | Where to redirect after successful password reset (e.g., `/login`) | Needed for forgot-password flow |
 
-> **Note:** The MCP tool description only lists redirect/login/logout/reset_password, but `post_reset_password` also works.
+> **Note:** Any other URL type (including uppercase like `LOGIN`) is rejected with 400.
 
 ### Save an Email Template
 
@@ -126,19 +126,19 @@ Tool: apptorID_save_email_template
   realmId: "{from list_realms}"        ← MUST be realmId, NOT accountId
   emailType: "reset_password"           ← see email types below
   subject: "Reset your password"
-  body: "<h1>Hi {{user_name}},</h1><p><a href=\"{{password_reset_url}}\">Reset Password</a></p>"
+  body: "<h1>Hi {{user_name}},</h1><p><a href=\"{{password_reset_url}}\">Reset Password</a> (valid for {{link_expiry}})</p>"
 ```
 
 `emailType` must be one of `welcome_email`, `reset_password`, `password_changed`, `magic_link`; anything else is rejected.
 
-**CRITICAL: Mandatory template variables.** The body/subject/footer MUST include these or the email will be sent with unresolved placeholder text, making it useless:
+**Mandatory template variables.** The server rejects a template whose subject, body and footer lack one of these, with `{{var}} is mandatory`:
 
-| Email Type | Mandatory Variable | Description |
+| Email Type | Required by the server | Description |
 |---|---|---|
-| `welcome_email` | `{{password_reset_url}}` | Welcome/set-password link |
-| `reset_password` | `{{password_reset_url}}` | Password reset link |
+| `welcome_email` | `{{password_reset_url}}`, `{{user_name}}` | Welcome/set-password link |
+| `reset_password` | `{{password_reset_url}}`, `{{user_name}}`, `{{link_expiry}}` | Password reset link |
 | `password_changed` | _(none)_ | Confirmation email |
-| `magic_link` | `{{link}}` | Magic link URL |
+| `magic_link` | _(none enforced — include `{{link}}` or the email is useless)_ | Magic link URL |
 
 **Available variables per email type:**
 
@@ -146,7 +146,7 @@ For `welcome_email` and `reset_password`: `{{password_reset_url}}`, `{{link_expi
 
 For `magic_link`: `{{link}}`, `{{expiry}}`, `{{user_name}}`
 
-**There is NO server-side validation** of template variables. Missing variables just stay as literal text in the email.
+Unknown variables are not checked; they stay as literal text in the email.
 
 **Fallback chain:** realm template → account template → master default.
 
@@ -269,7 +269,7 @@ All tool names are prefixed with `apptorID_`:
 | **Setup** | `full_setup` |
 | **Realms** | `list_realms`, `create_realm`, `get_realm`, `update_realm`, `delete_realm`, `configure_password_policy` |
 
-> **Teardown order:** `delete_realm` fails while the realm still has users or app clients. `delete_user` fails with "User should be disabled" unless the user is disabled first, and there is NO MCP disable tool: disable over HTTP (`PUT /realms/{realmId}/users/{userName}/disable`, admin token), then `delete_user`, then `delete_app_client`, then `delete_realm`.
+> **Teardown order:** `delete_realm` fails while the realm still has users or app clients. `delete_user` fails with "User should be disabled" unless the user is disabled first, and there is NO MCP disable tool: disable over HTTP (`PUT /realms/{realmId}/users/{userName}/disable`, admin token), then `delete_user`, then `delete_app_client`, delete any realm email templates over HTTP (`DELETE /email-templates/{id}`; IDs from `get_email_templates` per `emailType`), then `delete_realm`.
 | **App Clients** | `list_app_clients`, `create_app_client`, `get_app_client`, `update_app_client`, `delete_app_client`, `reset_client_secret` |
 | **App URLs** | `list_app_urls`, `add_app_urls`, `delete_app_url` |
 | **IdPs** | `list_identity_providers`, `add_idp_connection`, `get_idp_connections`, `remove_idp_connection` |
