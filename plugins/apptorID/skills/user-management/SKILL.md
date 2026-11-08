@@ -190,8 +190,8 @@ PUT    /realms/{realmId}/users/{userName}/enable
 
 - Admin API credentials are SEPARATE from OAuth credentials in the config
 - `appClientId` is required for every local user created via `POST /realms/{realmId}/users`, or the call returns 400
-- Created WITH `password` → validated against the realm policy, status ACTIVE immediately; a welcome email is still sent
-- Created WITHOUT `password` → status FORCE_PASSWORD_CHANGE; the welcome email's link sets the password
+- Created WITH `password` → validated against the realm policy, status `active` immediately; a welcome email is still sent
+- Created WITHOUT `password` → status `force_change_password`; the welcome email's link sets the password
 - `?appHandlesNotification=true` → no email; the response's `notificationToken` is the set-password token for the app to send itself
 - MCP tools can also do user operations directly: `apptorID_create_user`, `apptorID_list_users`, etc. — use them for one-off operations if user asks
 - See `references/apptorID-api-spec.md` for complete endpoint documentation with curl examples

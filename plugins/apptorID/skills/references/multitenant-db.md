@@ -430,7 +430,7 @@ public class OrgOnboardingService {
             .header("Authorization", "Bearer " + token)
             .bodyValue(Map.of(
                 "name", orgDisplayName + " App",
-                "appType", "web",                    // spa | web | mobile | m2m
+                "appType", "web",                    // spa | web | mobile | desktop
                 "realmId", realmId,
                 "idpClient", false,
                 "multiTenant", false))

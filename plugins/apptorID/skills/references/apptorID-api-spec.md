@@ -284,7 +284,7 @@ These are the endpoints a SaaS app calls at **customer-onboarding time** (Model 
 | POST | `app-clients/{appClientId}/resource-servers/{resourceServerName}` | M+R | Link one RS **by name** |
 | PUT | `app-clients/{appClientId}/resource-servers` | M+R | Replace all RS links; body = `List<String>` of names |
 
-**`AppClient` DTO fields:** `name`, `appType` (`spa`/`web`/`mobile`/`m2m`), `realmId`, `idpClient` (**always send `false`**), `multiTenant` (**always send `false`** — no-op server-side), `accessTokenExpirationInMin`, `idTokenExpirationInMin`, `refreshTokenExpirationInDays`, `requiresMfa`, `resourceServerNames`, `passwordTokenExpiryInSeconds`, `otpValidityInSeconds`, `maxConcurrentSessions` (optional cap on concurrent login/refresh-token sessions a single user may hold with this client; leave blank or `0` for unlimited — when a positive cap is exceeded the oldest session is evicted).
+**`AppClient` DTO fields:** `name`, `appType` (`spa`/`web`/`mobile`/`desktop`), `realmId`, `idpClient` (**always send `false`**), `multiTenant` (**always send `false`** — no-op server-side), `accessTokenExpirationInMin`, `idTokenExpirationInMin`, `refreshTokenExpirationInDays`, `requiresMfa`, `resourceServerNames`, `passwordTokenExpiryInSeconds`, `otpValidityInSeconds`, `maxConcurrentSessions` (optional cap on concurrent login/refresh-token sessions a single user may hold with this client; leave blank or `0` for unlimited — when a positive cap is exceeded the oldest session is evicted).
 
 ### App URLs
 

@@ -56,11 +56,12 @@ Tool: apptorID_create_user
   firstName: "John"
   lastName: "Doe"                    (optional)
   userName: "user@company.com"       (optional — defaults to email)
-  password: "TempPass123!"           (optional — if provided, user is ACTIVE immediately)
+  password: "TempPass123!"           (optional — checked against the realm password policy; if provided, user is `active` immediately)
 ```
 
 **Important:**
-- If `password` is omitted → user is created with FORCE_PASSWORD_CHANGE status but **NO welcome email is sent** (the MCP tool bypasses the notification system). You MUST either: (a) always provide a password when creating via MCP, or (b) follow up with `apptorID_forgot_password` to trigger the email manually.
+- If `password` is omitted → user is created with status `force_change_password` and **NO welcome email is sent**. Either (a) provide a password, or (b) follow up with `apptorID_set_password`, or `apptorID_forgot_password` (needs an app client) to email a reset link.
+- A password that fails the realm policy is rejected with the policy message.
 - The MCP `create_user` tool does NOT support `orgRefId`, `userRefId`, or `appClientId`. To create users WITH these fields, the developer's app must use the HTTP API directly (see `references/apptorID-api-spec.md`).
 - `userId` is auto-generated. Never pass it.
 
@@ -71,7 +72,7 @@ Tool: apptorID_create_user
 Tool: apptorID_full_setup
   realmName: "My App"
   appName: "My App Client"
-  appType: "web"                     (one of: spa, web, mobile, m2m)
+  appType: "web"                     (one of: spa, web, mobile, desktop; anything else is rejected)
   redirectUris: "http://localhost:3000/auth/callback"
   loginUrls: "https://{authDomain}/hosted-login/"   (for hosted login)
   logoutUrls: "http://localhost:3000"
@@ -127,6 +128,8 @@ Tool: apptorID_save_email_template
   subject: "Reset your password"
   body: "<h1>Hi {{user_name}},</h1><p><a href=\"{{password_reset_url}}\">Reset Password</a></p>"
 ```
+
+`emailType` must be one of `welcome_email`, `reset_password`, `password_changed`, `magic_link`; anything else is rejected.
 
 **CRITICAL: Mandatory template variables.** The body/subject/footer MUST include these or the email will be sent with unresolved placeholder text, making it useless:
 
@@ -302,7 +305,7 @@ All tool names are prefixed with `apptorID_`:
 - **Hosted login URL:** Always register a `login` URL (for hosted login, `https://{authDomain}/hosted-login/`). Without one, a plain `/oidc/auth` fails with `no_login_url_registered`; only `provider_id=local` requests and email links fall back to the hosted SPA.
 - **Hosted login includes Forgot password and Reset password pages.** Register a `reset_password` URL only if the app builds its own reset page.
 - **Default SMTP:** Works without email config. Fallback: realm → account → master.
-- **MCP `create_user`:** with password → ACTIVE; without → FORCE_PASSWORD_CHANGE. Neither sends an email. The HTTP API (`POST /realms/{realmId}/users`) sends a welcome email for every local user unless `appHandlesNotification=true`.
+- **MCP `create_user`:** with password → `active`; without → `force_change_password`. Neither sends an email. The HTTP API (`POST /realms/{realmId}/users`) sends a welcome email for every local user unless `appHandlesNotification=true`.
 - **clientSecret shown only once** at app client creation. Save it immediately.
 - **accessKeySecret shown only once** at access key creation. Save it immediately.
 - MCP not available → tell user to use apptorID Admin UI.
