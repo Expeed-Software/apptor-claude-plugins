@@ -17,7 +17,7 @@ Generates backend endpoints for creating, listing, getting, updating, disabling,
 
 ## MANDATORY: Ground in the Live OpenAPI Spec First
 
-Before writing ANY code, fetch the live OpenAPI spec from the realm (`https://{realm-authDomain}/swagger/apptor-auth-server-0.5.yml`, or browse `/swagger-ui/`) — it is authoritative. Then read `references/apptorID-api-spec.md` as the curated quick reference. When they conflict, the live spec wins. Do NOT guess parameter names or endpoint paths.
+Before writing ANY code, fetch the live OpenAPI spec from the realm (`https://{realm-authDomain}/swagger/apptor-auth-server-{version}.yml`; take the exact file name from `/swagger-ui/index.html`, never hardcode the version) — it is authoritative. Then read `references/apptorID-api-spec.md` as the curated quick reference. When they conflict, the live spec wins. Do NOT guess parameter names or endpoint paths.
 
 Note: MCP `apptorID_create_user` does NOT accept `orgRefId`/`userRefId`/`appClientId`. To create users with those fields, use the HTTP API `POST /realms/{realmId}/users` directly.
 
@@ -85,11 +85,11 @@ Use the **same created realm URL** for user management calls.
 
 1. **Detect** — find existing auth setup, config file, backend framework, frontend framework
 2. **Check credentials** — does the config already have admin API credentials? If not, ask user for them or provision via MCP (`apptorID_create_access_key`)
-3. **Check for set-password page** — does the app have a page where new users can set their password? If not, plan to build one.
+3. **Check for set-password page** — does the app have a page where new users can set their password? If not, the welcome link uses apptorID's hosted reset page; build one only if the user wants their own UI.
 4. **Read reference** — read `references/apptorID-api-spec.md` first, then the stack-specific reference file's admin API section
 5. **Build admin client** — service that acquires admin token, caches it, makes API calls
 6. **Build endpoints** — user CRUD routes using the admin client
-7. **Build set-password page (if missing)** — frontend page where new users land from the welcome email to set their password. Register the page URL as `reset_password` type via MCP (`apptorID_add_app_urls`). Also register `post_reset_password` redirect URL. See "Set-Password Page" section below for details.
+7. **Build set-password page (only if the user wants their own UI)** — frontend page where new users land from the welcome email to set their password. Register the page URL as `reset_password` type via MCP (`apptorID_add_app_urls`). Also register `post_reset_password` redirect URL. Otherwise skip: the hosted reset page handles it. See "Set-Password Page" section below for details.
 8. **Wire orgRefId/userRefId** — create-user endpoint accepts the developer's org/user IDs and passes them as orgRefId/userRefId
 9. **Wire credentials** — add access_key_id/secret to backend config in the apptorID section
 10. **Test and review**
@@ -112,9 +112,9 @@ Use the **same created realm URL** for user management calls.
 
 ## Set-Password Page (built if missing)
 
-New users created WITHOUT a password receive a welcome email with a link. That link MUST point to a page in the developer's app. If this page doesn't exist, the email link leads to a 404 and the user can never log in.
+New users created WITHOUT a password receive a welcome email with a link. If no `reset_password` URL is registered, the link goes to apptorID's hosted reset page (`https://{authDomain}/hosted-login/?token=...&client_id=...`) and nothing needs building. Build this page only if the app wants its own UI; then register its URL as `reset_password`, or the link still goes to the hosted page.
 
-**The page receives:** `?token={reset-token}&client_id={app-client-id}` as URL query parameters.
+**The page receives:** `?token={reset-token}&client_id={app-client-id}` as URL query parameters. The token is opaque — never decode it; for the username call `GET /api/hosted-login/reset-config?token=...&client_id=...` and read `userName` (see `references/apptorID-api-spec.md` "Reset Password Page").
 
 **The page does:**
 1. Shows a "Set your password" form (new password + confirm password)
@@ -127,7 +127,6 @@ Content-Type: application/json
 {
   "token": "{token-from-url}",
   "password": "{new-password}",
-  "userName": "{extracted-from-token-sub-claim-or-passed-as-query-param}",
   "appClientId": "{client_id-from-url}"
 }
 ```
@@ -190,14 +189,17 @@ PUT    /realms/{realmId}/users/{userName}/enable
 ## Key Details
 
 - Admin API credentials are SEPARATE from OAuth credentials in the config
-- User created WITH password (via set-password after creation) → status ACTIVE immediately (no email)
-- User created WITHOUT password → triggers welcome email via default SMTP. Requires `appClientId` in the creation request.
+- `appClientId` is required for every local user created via `POST /realms/{realmId}/users`, or the call returns 400
+- Created WITH `password` → validated against the realm policy, status ACTIVE immediately; a welcome email is still sent
+- Created WITHOUT `password` → status FORCE_PASSWORD_CHANGE; the welcome email's link sets the password
+- `?appHandlesNotification=true` → no email; the response's `notificationToken` is the set-password token for the app to send itself
 - MCP tools can also do user operations directly: `apptorID_create_user`, `apptorID_list_users`, etc. — use them for one-off operations if user asks
 - See `references/apptorID-api-spec.md` for complete endpoint documentation with curl examples
 
 ## Reference Files
 
 Read the admin API section of the relevant stack reference:
+- **Any Java backend:** offer the apptorID Java SDK (`AuthServerAdminClient`) first — see `references/java-micronaut.md` "Option A"
 - Java/Spring → `references/java-spring.md`
 - Java/Micronaut → `references/java-micronaut.md`
 - Node/Express → `references/nodejs-express.md`
@@ -208,6 +210,8 @@ Read the admin API section of the relevant stack reference:
 
 - Write code, don't describe it.
 - Follow project conventions.
+- Hand-written HTTP calls must match the live OpenAPI spec; with the Java SDK, confirm signatures with `javap` first (see `apptorID:setup` "Verify the SDK").
+- The project must build cleanly before you report done.
 - Read reference files FIRST.
 - Credentials in backend config only.
 - Adapt to any stack.

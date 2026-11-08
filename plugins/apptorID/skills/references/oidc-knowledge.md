@@ -110,7 +110,7 @@ When the app hosts its own login page instead of using apptorID's hosted login:
    &request_id={request_id}
 
 5. Response:
-   { "preAuthToken": "pat-xyz..." }
+   { "preAuthToken": "<uuid>", "state": "{state}", "expiresIn": 60 }
 
 6. App redirects to:
    {realm}/oidc/auth?request_id={request_id}&preAuthToken={pat-xyz}
@@ -185,6 +185,8 @@ Never use both. Never send client_secret from the browser.
 
 ## Token Refresh
 
+**The `refresh_token` grant requires `client_secret`** — a public client (pure SPA, no secret) cannot refresh; it re-runs the authorization flow instead (silent while the apptorID session is alive).
+
 ```
 POST {realm}/oidc/token
 Content-Type: application/x-www-form-urlencoded
@@ -244,24 +246,29 @@ Access tokens and ID tokens are RS256-signed JWTs with these claims:
 
 ```json
 {
-  "sub": "user-uuid",
+  "sub": "user@example.com",
   "iss": "https://{realm-domain}",
   "aud": "client-id",
   "exp": 1712700000,
   "iat": 1712696400,
   "nbf": 1712696400,
   "email": "user@example.com",
+  "user_name": "user@example.com",
   "name": "John Doe",
   "given_name": "John",
   "family_name": "Doe",
-  "user_id": "user-uuid",
+  "user_id": "user-ref-id",
   "account_id": "account-uuid",
   "org_id": "org-ref-id",
+  "app_client_id": "app-client-uuid",
   "roles": ["admin", "editor"],
   "resource_server_id": "rs-uuid",
-  "product_owner_ref_id": "po-ref-id"
+  "product_owner_ref_id": "po-ref-id",
+  "nonce": "{nonce}"
 }
 ```
+
+`sub` and `user_name` are the user's **userName**, not a UUID. `user_id` is the app-supplied `userRefId` and `org_id` the `orgRefId`; each is present only when set on the user. `nonce` is present only when the auth request sent one.
 
 **Validation steps:**
 1. Fetch JWKS from `{realm}/oidc/jwks` (cache the keys, refresh periodically)
@@ -298,25 +305,26 @@ When registering URLs for an app client (via Admin UI or MCP tools):
 
 apptorID's hosted login page is at: `https://{realm-domain}/hosted-login/`
 
-**There IS an automatic fallback** (server commit `feat(auth): fall back to hosted SPA when no login/reset URL is registered`): if NO `login` URL is registered for an app client, the server resolves it to the realm's hosted SPA `https://{realm-domain}/hosted-login/`. The same applies to `reset_password`. `logout` and `post_reset_password` do NOT fall back (they throw if missing, since they point to customer-owned destinations).
+**The hosted fallback is narrower than it looks.** With NO `login` URL registered:
+- `/oidc/auth` **without** `provider_id` fails with `no_login_url_registered` — no fallback on this path.
+- `/oidc/auth?provider_id=local` falls back to the realm's hosted SPA `https://{realm-domain}/hosted-login/` (not for `idpClient` app clients, which must register a login URL).
+- Reset and welcome email links fall back to the hosted SPA when no `reset_password` URL is registered.
 
-Practical consequences:
-- Register your real `login` URL explicitly — customer-registered URLs always win over the fallback.
-- **Seeing the hosted login page during a test usually means you forgot to register your `login` URL, NOT that your integration code is broken.** Register URLs before testing.
-- MCP `full_setup` no longer auto-registers the hosted login URL (the fallback covers it). After `full_setup` the app-urls list may be empty by design — register your real URLs explicitly.
+`logout` and `post_reset_password` never fall back (they point to customer-owned destinations).
+
+Practical consequence: **always register a `login` URL** — `https://{realm-domain}/hosted-login/` for hosted login, or the app's own page. Customer-registered URLs always win over the fallback. MCP `full_setup` registers only the redirect URLs, plus any login/logout URLs you pass it.
 
 When a `login` URL is registered (or the fallback resolves), the `/oidc/auth` endpoint redirects to:
   `https://{login-url}?request_id={request_id}`
 
-The hosted login page then fetches its config from `/api/hosted-login/config?requestId={request_id}` and renders the login form with configured IdPs.
+The hosted login page then fetches its config from `/api/hosted-login/config?requestId={request_id}` and renders the login form with configured IdPs. The same SPA also serves forgot password (`?view=forgot`) and reset password (`?token=...&client_id=...`).
 
 ## login_uri Parameter
 
 The `/oidc/auth` endpoint accepts an optional `login_uri` query parameter:
-- If provided: apptorID redirects to that URL with `?request_id=...` for client-hosted login
-- If not provided and one login URL is registered: uses that
-- If not provided and multiple registered: uses the first one
-- If not provided and none registered: falls back to the realm's hosted login SPA (see above)
+- If provided: it must match one of the app client's registered login URLs (case-insensitive), otherwise the request fails with "Invalid login URI"; apptorID then redirects there with `?request_id=...`
+- If not provided: the first registered login URL is used
+- If not provided and none registered: fails with `no_login_url_registered` (see the fallback rules above)
 
 ## Discovery Response Structure
 
@@ -334,8 +342,9 @@ The `/oidc/auth` endpoint accepts an optional `login_uri` query parameter:
   "master_realm_base_uri": "https://master.sandbox.auth.apptor.io",
   "scopes_supported": ["email", "profile", "openid"],
   "claims_supported": ["sub"],
-  "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
-  "subject_types_supported": ["public"]
+  "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
+  "subject_types_supported": ["public"],
+  "grant_types_supported": ["authorization_code", "client_credentials", "password", "refresh_token", "passwordless_otp", "token_exchange", "urn:ietf:params:oauth:grant-type:token-exchange"]
 }
 ```
 

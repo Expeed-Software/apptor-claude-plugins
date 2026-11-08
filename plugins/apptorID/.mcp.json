@@ -1,10 +1,10 @@
 {
   "apptorID": {
     "type": "http",
-    "url": "${APPTOR_MCP_URL:-https://master.sandbox.auth.apptor.io/mcp}",
+    "url": "${user_config.mcp_url}",
     "headers": {
-      "X-Access-Key-Id": "${APPTOR_ACCESS_KEY_ID}",
-      "X-Access-Key-Secret": "${APPTOR_ACCESS_KEY_SECRET}"
+      "X-Access-Key-Id": "${user_config.access_key_id}",
+      "X-Access-Key-Secret": "${user_config.access_key_secret}"
     }
   }
 }

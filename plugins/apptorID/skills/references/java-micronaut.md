@@ -14,15 +14,15 @@ The apptorID project provides a Java client SDK (`apptor-authserver-sdk-java`) t
 
 ### Dependency
 
-Add to `build.gradle`:
+Requires Java 11+. Published to Apptor's public Maven repository on S3 — no credentials needed. Add to `build.gradle`:
 ```groovy
 repositories {
-    // Apptor's S3 Maven repository (or your internal Nexus/Artifactory)
-    maven { url "s3://your-apptor-sdk-repo" }
+    mavenCentral()
+    maven { url "https://external-sdks.s3.amazonaws.com" }
 }
 
 dependencies {
-    implementation 'io.apptor:apptor-authserver-sdk-java:1.0.0'
+    implementation 'io.apptor.authserver:apptor-authserver-sdk-java:0.97'
 }
 ```
 
@@ -57,10 +57,20 @@ public class ApptorClientFactory {
 }
 ```
 
-The SDK's `OidcClient` provides:
-- `callDiscoveryAPI(authDomain)` — fetches OIDC metadata
-- Token exchange methods
-- Admin API client for realm/user/app-client management
+`OidcClient(authDomain, clientId, clientSecret)` — per app client:
+- `retrieveBearerTokensFromAuthorizationCode(code)`, `retrieveBearerTokensFromRefreshToken(refreshToken)`
+- `revokeToken(token, resourceServerId)`, `getUserInfo(accessToken)`
+- `retrieveBearerTokensFromPassword(...)`, `retrieveBearerTokensFromOtp(...)`
+
+`AuthServerAdminClient(authDomain, accessKeyId, accessKeySecret)` — admin operations with an access key:
+- Realms, app clients, app URLs, IdP connections, resource servers, roles, permissions
+- Users: `createUser(user, appHandlesNotification)`, `updateUser`, `disableUser`, `deleteUser`, `createUserRoles`
+- Email/SMS config and templates
+- App-sent notifications: `getForgotPasswordToken(appClientId, userName, true)`, `getResendInvitationToken(appClientId, userName, true)` and the `...ByPhone` variants return the token/OTP instead of apptorID sending it
+
+Not in the SDK — call over HTTP: `POST /oidc/pre-authorize`, the `/oidc/auth` browser redirect, and `POST /reset-password`.
+
+This list can lag the SDK version. After the dependency resolves, confirm the real signatures with `javap -cp <apptor-authserver-sdk-java jar> io.apptor.authserver.client.AuthServerAdminClient io.apptor.authserver.client.OidcClient` and code against that output.
 
 ### Integration Config for M2M
 
@@ -490,7 +500,7 @@ public class ApptorSecurityFilter implements HttpServerFilter {
             try {
                 JWTClaimsSet claims = jwtProcessor.process(authHeader.substring(7), null);
                 request.setAttribute("user_claims", claims);
-                request.setAttribute("user_id", claims.getSubject());
+                request.setAttribute("user_name", claims.getSubject());
                 return chain.proceed(request);
             } catch (Exception e) {
                 return Flux.just(HttpResponse.unauthorized());
@@ -815,7 +825,7 @@ In your JWT validation filter, extract `org_id` and `user_id` from token claims 
 // After JWT validation in your filter:
 JWTClaimsSet claims = jwtProcessor.process(token, null);
 
-request.setAttribute("sub", claims.getSubject());                        // internal user ID
+request.setAttribute("sub", claims.getSubject());                        // userName
 request.setAttribute("org_id", claims.getStringClaim("org_id"));         // from orgRefId
 request.setAttribute("user_id", claims.getStringClaim("user_id"));      // from userRefId
 request.setAttribute("email", claims.getStringClaim("email"));

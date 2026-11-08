@@ -33,9 +33,9 @@ For protocol details, read `references/oidc-knowledge.md`.
 Before writing ANY integration code:
 
 1. **Fetch the live OpenAPI spec from the customer's realm** — it is the authoritative source for every endpoint, parameter, and request/response shape. The hand-written `references/apptorID-api-spec.md` is a curated cheat sheet that can drift; the live spec cannot.
-   - `https://{any-realm-authDomain}/swagger/apptor-auth-server-0.5.yml` (or whatever version the server reports)
-   - Or browse `https://{any-realm-authDomain}/swagger-ui/`
-   - If you only have the master URL so far, use `https://master.sandbox.auth.apptor.io/swagger/apptor-auth-server-0.5.yml`.
+   - Find the spec's file name: fetch `https://{any-realm-authDomain}/swagger-ui/index.html` and take the `/swagger/apptor-auth-server-{version}.yml` path it references. Never hardcode the version.
+   - Then fetch `https://{any-realm-authDomain}/swagger/apptor-auth-server-{version}.yml`.
+   - If you only have the master URL so far, use `https://master.sandbox.auth.apptor.io` (or the URL configured in the plugin's options) as the host.
 2. **Then read `references/apptorID-api-spec.md`** as the curated quick reference for the endpoints this plugin uses most.
 3. **When the two disagree, the live spec wins.** If you find a drift, note it to the user.
 
@@ -45,10 +45,10 @@ Do NOT guess parameter names or endpoint paths from memory. Fetch, then read.
 
 **You MUST complete ALL of these steps before writing ANY code. No exceptions.**
 
-0. **CONFIRM THE ACCOUNT BEFORE CREATING ANYTHING.** The access key in `.mcp.json` / settings is bound to ONE account. If it's the wrong account, every realm, app client, user, and IdP you create will pollute the wrong tenant — and there is no rollback.
-   - Call `apptorID_whoami`. It returns `accountId`, `accountName`, `userId`, `userName`, `roles`, and a summary of the realms in scope.
-   - Show the user: **"Your access key is bound to account `<accountName>` (id `<accountId>`), user `<userName>`, with realms: [list]. Is this the right account?"** Wait for explicit yes.
-   - If the response includes no `accountName` or `whoami` fails with an auth error: STOP. The credentials are invalid, expired, or insufficient. Do not proceed.
+0. **CONFIRM THE ACCOUNT BEFORE CREATING ANYTHING.** The access key entered in the plugin's options (`/plugin` → apptorID → **Configure options**) is bound to ONE account. If it's the wrong account, every realm, app client, user, and IdP you create will pollute the wrong tenant — and there is no rollback.
+   - Call `apptorID_list_realms` (no arguments). Each realm carries `accountId`. Then call `apptorID_get_account` with that `accountId` for the account name. If there are no realms yet, there is no account ID to look up: tell the user the key reaches an account with no realms and ask them to confirm it is the intended one.
+   - Show the user: **"Your access key is bound to account `<accountName>` (id `<accountId>`), with realms: [list]. Is this the right account?"** Wait for explicit yes.
+   - If `apptorID_list_realms` fails with an auth error: STOP. The credentials are invalid, expired, or insufficient. Do not proceed.
    - **Do NOT use `apptorID_test_connection` here** — it takes a `realmAuthDomain`, not an access key, so it cannot verify which account you're in.
 1. **Scan the codebase** — use Glob, Grep, Read to find:
    - Existing login pages, auth pages, or auth-related components
@@ -72,8 +72,17 @@ Do NOT guess parameter names or endpoint paths from memory. Fetch, then read.
    (B) **In-app login page** — build a login form in your app that calls apptorID's pre-authorize endpoint (LOCAL username/password only — IdP flows do NOT use pre-authorize)
    (C) **Use your existing login page** — I found [page] in your repo, integrate apptorID into it"
    **Wait for the user's answer. Do NOT proceed without it.**
-6. **Confirm the integration approach** — summarize what you will build and where, get user approval
-7. **Only then start writing code**
+6. **Ask WHERE ROLES AND PERMISSIONS ARE MANAGED** — "Where should your app's roles/permissions live?
+   (A) **In apptorID** — I create a resource server for your API, its roles and permissions, and assign roles to users; they arrive in the token's `roles` claim (with `resource_server_id`) and your API checks them. Admins manage them through apptorID (MCP or admin API) or a screen in your app that calls that API.
+   (B) **In your app's database** — apptorID only authenticates; your app maps the token's `user_name` / `user_id` to its own roles table and checks permissions itself.
+   (C) **None needed** right now"
+   Also ask: who assigns roles (tenant admins in your UI, your staff, or provisioning code), and for Model B whether roles differ per org (`orgRefId`-scoped role lookup).
+7. **Ask WHO ISSUES THE TOKENS YOUR API ACCEPTS** — "Which token should your API trust?
+   (A) **apptorID's tokens as-is** — validate apptorID's JWT (JWKS) on every request (default).
+   (B) **Your own token** — apptorID authenticates; your backend verifies the apptorID tokens once at callback, then mints and signs its own session token/JWT with your own key, expiry and refresh. Your API then validates only your token; logout must clear both your session and apptorID's (`/oidc/logout`)."
+   Do NOT offer `/oidc/custom-token` for app-specific claims: refresh drops those claims (current server limitation). If the app needs its own claims, that is option (B).
+8. **Confirm the integration approach** — summarize what you will build and where, get user approval
+9. **Only then start writing code**
 
 **If you skip any of these steps, you WILL build the wrong thing.**
 
@@ -94,11 +103,21 @@ If MCP tools are available, confirm environment FIRST:
 ## Process
 
 1. **Explore** — silently scan codebase: backend framework, frontend framework, existing auth, config format, test framework, project shape (monorepo, fullstack, backend-only, frontend-only). Also detect the app's existing user/org model (tables, PKs) — you'll need it for the tenancy + external-ID questions.
-2. **Confirm** — present findings, then ask the HARD GATE questions one at a time: tenancy model (Single/A/B), external ID mapping (orgRefId/userRefId), which IdPs, hosted vs in-app login, existing credentials.
+2. **Confirm** — present findings, then ask the HARD GATE questions one at a time: tenancy model (Single/A/B), whether tenants get their own origins (subdomain/custom domain — see "Multi-tenant URLs"), external ID mapping (orgRefId/userRefId), which IdPs, hosted vs in-app login, existing credentials.
 3. **Provision** — for the FIRST realm, via MCP if available (full_setup or individual tools). For Model A's per-customer realms, do NOT provision via MCP — that's runtime work the app does over HTTP. Handle existing resources: list first, only create what's missing. Without MCP: use user-provided credentials or placeholders.
-4. **Build** — read the relevant reference file FIRST, then write all code: OIDC client, auth routes, JWT middleware, config, login page, callback, auth context, HTTP interceptor. Follow project conventions.
+4. **Build** — read the relevant reference file FIRST, then write all code: OIDC client, auth routes, JWT middleware, config, login page, callback, auth context, HTTP interceptor. Follow project conventions. Every hand-written HTTP call must match the live OpenAPI spec (path, method, params, body field names). If using the Java SDK, verify it first — see "Verify the SDK" below.
 5. **Wire credentials** — write all apptorID credentials into the backend config file in one section. Suggest secure storage for production.
-6. **Test** — run build, write automated tests, verify runtime if possible.
+6. **Test** — the project MUST compile/build cleanly before you report done; then write automated tests and verify runtime if possible.
+
+### Verify the SDK (Java, when the SDK is used)
+
+The reference file's method list can lag a new SDK version. After adding the dependency, resolve it (e.g. `./gradlew dependencies` or a build), locate `apptor-authserver-sdk-java-*.jar` in the Gradle/Maven cache, and read the real signatures before writing calls:
+
+```bash
+javap -cp <path-to-jar> io.apptor.authserver.client.AuthServerAdminClient io.apptor.authserver.client.OidcClient
+```
+
+Code against what `javap` prints. If a method you need is missing (e.g. `/oidc/pre-authorize`, `POST /reset-password`), call the endpoint over HTTP using the live OpenAPI spec for its shape.
 7. **Self-review** — security checklist + completeness checklist. Rate 1-10, fix until 9+.
 8. **Offer next steps** — adaptively offer relevant features based on project state (forgot password, user management, email branding, social login, multi-tenant).
 
@@ -115,7 +134,7 @@ The tenancy answer from the HARD GATE decides the entire architecture. Build exa
 - **Do NOT put any `client_id` / `client_secret` in app config.** There is no single client. Putting one in config is the #1 mistake — it silently makes a multi-tenant app behave single-tenant.
 - **Provision at dev time (MCP):** nothing per-customer. Optionally one "template"/admin realm. The customer's access key (already in env) is what the app uses at runtime.
 - **Provision at customer-signup time (runtime, HTTP API in the app's code):** when a new org signs up, the app calls the HTTP API with an admin token minted from the customer's access key:
-  1. `POST /accounts/{accountId}/realms` → create the org's realm (you know `accountId` from your token / `apptorID_whoami`)
+  1. `POST /accounts/{accountId}/realms` → create the org's realm (you know `accountId` from your token / `apptorID_list_realms`)
   2. `POST /realms/{realmId}/app-clients` (`idpClient:false, multiTenant:false`) → get `clientId` + `clientSecret`
   3. `POST /app-clients/{clientId}/url-type/{login|redirect|logout}/app-urls` → register URLs BEFORE first login
   4. `POST /app-clients/{clientId}/idp-connections` → per IdP
@@ -130,9 +149,25 @@ The tenancy answer from the HARD GATE decides the entire architecture. Build exa
 - **Per-request:** read the `org_id` claim from the verified JWT, scope every query by it.
 - **Hard constraint:** `(email, realm_id)` and `(user_name, realm_id)` are unique — the same email cannot belong to two orgs in the shared realm. If your customers might share end-user emails across orgs, use Model A instead.
 
+### Multi-tenant URLs (tenant subdomains / custom domains)
+
+Ask early: does each tenant get its own origin (e.g. `acme.myapp.com`, `globex.myapp.com`, or a custom domain)? If yes, these server rules decide the design:
+
+- **Exact match, no wildcards.** `redirect`, `login` and `logout` URLs are compared as whole strings, case-insensitive (`AppClientEntity.matchesRegisteredUrl`). `https://*.myapp.com/callback` is NOT supported. Every tenant origin's callback, login and logout URL must be registered on the app client that tenant uses.
+- **Scheme:** a registered `https://…` URL never accepts `http://`. A registration without a scheme accepts itself and the `https://` form only. Host, port, path and trailing slash must match exactly.
+- **Login page per tenant:** pass `login_uri={that tenant's login URL}` on `/oidc/auth`; it must be one of the registered login URLs. Without it the first registered login URL is used.
+- **Email links use the FIRST registered `reset_password` / `login` URL of the app client** (`UserExternalService.getUrl`). One shared app client therefore cannot send tenant-specific links.
+- **Onboarding a tenant is runtime work:** when the app creates a tenant, it must register that tenant's URLs over HTTP (`POST /app-clients/{clientId}/url-type/{urlType}/app-urls`), not via MCP.
+
+Pick the design that fits:
+- **Model A (realm + app client per tenant):** register each tenant's own URLs on its own app client. Email links and login pages are naturally per tenant. Recommended when tenants have their own origins.
+- **Model B (shared app client):** register every tenant's redirect/login/logout URL on the one app client. For tenant-specific email links, the app must send the emails itself (`appHandlesNotification=true`, see `apptorID:forgot-password` Mode 2) and build the link with the tenant's origin.
+
 ## App Client Flags (HARD RULE)
 
-When creating ANY app client (MCP or HTTP), always pass `idpClient: false` and `multiTenant: false`. **Never ask the user about these, never set them true.**
+When creating ANY app client, keep `idpClient` and `multiTenant` false. **Never ask the user about these, never set them true.**
+- MCP `apptorID_create_app_client`: has no `idpClient` parameter (the server sets it false); pass `multiTenant` as the string `"false"` or omit it.
+- HTTP `POST /realms/{realmId}/app-clients`: pass `"idpClient": false, "multiTenant": false` in the body.
 - `multiTenant` is a no-op server-side (nothing reads it) — it has NOTHING to do with the tenancy model above.
 - `idpClient: true` is a different feature (apptorID acting as an upstream IdP, forces a consent step, bypasses the hosted-login fallback) and is out of scope for app integration.
 
@@ -160,7 +195,7 @@ Detection: if project has a backend → client_secret pattern. Pure SPA → PKCE
 Check if `apptorID_full_setup` tool exists → MCP mode. Otherwise → credentials from user or placeholders.
 
 **Decision tree:**
-- User has credentials → use directly, verify by calling `apptorID_whoami` (probes both that the access key is valid AND which account it's bound to — see HARD GATE step 0). Do NOT use `apptorID_test_connection` for credential verification; it requires a `realmAuthDomain` and only checks that a realm host responds, not whose account it belongs to.
+- User has credentials → use directly, verify with `apptorID_list_realms` + `apptorID_get_account` (proves the access key is valid AND which account it's bound to — see HARD GATE step 0). Do NOT use `apptorID_test_connection` for credential verification; it requires a `realmAuthDomain` and only checks that a realm host responds, not whose account it belongs to.
 - User lost client_secret → `apptorID_reset_client_secret`
 - User has realm, no app client → create client + URLs + IdPs
 - User unsure what exists → list realms, show options, let user pick or create
@@ -174,7 +209,7 @@ Handle partial failures: read `warnings`, use what succeeded, create failed reso
 
 ## App URL Registration — CRITICAL, AND ORDER MATTERS
 
-**Register app URLs immediately after creating the app client and BEFORE you test any login.** This is a real failure mode: if you skip it and test, the server's fallback kicks in (see below), the hosted login page appears, and you wrongly conclude your integration code is broken. Register first, test second.
+**Register app URLs immediately after creating the app client and BEFORE you test any login.** Without a registered `login` URL a plain `/oidc/auth` call fails with `no_login_url_registered`, and a `provider_id=local` call silently lands on the hosted page (see below) — either way you wrongly conclude your integration code is broken. Register first, test second.
 
 Register via MCP (`apptorID_add_app_urls`) or HTTP (`POST /app-clients/{clientId}/url-type/{urlType}/app-urls`):
 
@@ -183,27 +218,34 @@ Register via MCP (`apptorID_add_app_urls`) or HTTP (`POST /app-clients/{clientId
 | `login` | If hosted login: `https://{realm-url}/hosted-login/`. If in-app login: your app's login URL | Before first login test |
 | `redirect` | Your app's OAuth callback URL (e.g., `https://myapp.com/auth/callback`) | Before first login test |
 | `logout` | Where to redirect after logout (e.g., `https://myapp.com/`) | Before first logout test |
-| `reset_password` | Your app's reset password page (e.g., `https://myapp.com/reset-password`). **NOT the auth server** — it doesn't have a working one. | If forgot-password is planned |
+| `reset_password` | Only if the app has its own reset page (e.g., `https://myapp.com/reset-password`). Unregistered → links use the hosted reset page | If forgot-password with own page is planned |
 | `post_reset_password` | Where to redirect after password reset (e.g., `https://myapp.com/login`) | If forgot-password is planned |
 
 ### Hosted-login fallback — understand this before debugging
 
-The server has a deliberate fallback (`UserExternalService.getUrl`): when a `login` or `reset_password` URL is NOT registered for an app client, it resolves to the realm's hosted SPA at `https://{authDomain}/hosted-login/`. `logout` and `post_reset_password` do NOT fall back (they throw if missing — they point to customer-owned destinations).
+When no `login` / `reset_password` URL is registered, the server falls back to the realm's hosted SPA `https://{authDomain}/hosted-login/` in exactly two places:
+- **Email links** (reset, welcome, login link in emails) — `UserExternalService.getUrl`
+- **`/oidc/auth?provider_id=local`** — skipped for `idpClient` apps
+
+A plain `/oidc/auth` (no `provider_id`) does NOT fall back: it fails with `no_login_url_registered`. `logout` and `post_reset_password` never fall back (they throw if missing).
 
 Consequences:
 - Seeing the hosted login page during a test does NOT mean your code is wrong — it usually means you didn't register your `login` URL yet.
-- Customer-registered URLs always win over the fallback. Register your real URLs and the fallback never triggers.
-- MCP `full_setup` no longer auto-registers the hosted login URL — the fallback covers it. So after `full_setup`, the app-urls list may be empty by design; register your real URLs explicitly.
+- Customer-registered URLs always win over the fallback.
+- MCP `full_setup` registers only the redirect URLs plus any login/logout URLs you pass it; register the rest explicitly.
 
-**If you're using hosted login:** Register `https://{realm-url}/hosted-login/` as the `login` URL (or rely on the fallback, but explicit is clearer).
+**If you're using hosted login:** Register `https://{realm-url}/hosted-login/` as the `login` URL. Required — the fallback does not cover plain `/oidc/auth`.
 **If you're using in-app login:** Register your app's login page URL as the `login` URL.
 
-**The hosted login does NOT provide a reset password page.** The app must build its own reset page and register its URL as `reset_password` type.
+**The hosted login also serves Forgot password and Reset password pages.** With no `reset_password` URL registered, reset and welcome email links go to the hosted reset page. Register a `reset_password` URL only if the app builds its own reset page.
+
+**If the app must send its own emails** (own templates, or a non-SMTP provider such as SendGrid/SES API), it cannot use hosted login — the hosted page's forgot-password link always sends from apptorID. Use in-app login with `POST /oidc/pre-authorize` and see `apptorID:forgot-password` Mode 2.
 
 ## Reference Files
 
 Read BEFORE writing any auth code. **Fetch the live OpenAPI spec first** (see "Ground in the Live OpenAPI Spec First"), then use these:
 - **API Spec quick reference** → `references/apptorID-api-spec.md` (curated; live OpenAPI wins on conflict)
+- **Any Java backend (Java 11+, any framework):** offer the apptorID Java SDK before hand-writing HTTP calls — coordinates, Gradle setup and client API in `references/java-micronaut.md` "Option A". Ask the user; if they decline or lack access to the SDK repository, integrate manually.
 - Java/Spring → `references/java-spring.md`
 - Java/Micronaut → `references/java-micronaut.md`
 - Node/Express → `references/nodejs-express.md`

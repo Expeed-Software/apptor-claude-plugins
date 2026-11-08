@@ -468,7 +468,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
         return;
       }
       (req as any).user = decoded;
-      (req as any).userId = (decoded as any).sub;
+      (req as any).userName = (decoded as any).sub;
       (req as any).userRoles = (decoded as any).roles || [];
       next();
     });
@@ -484,7 +484,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
         return;
       }
       (req as any).user = decoded;
-      (req as any).userId = (decoded as any).sub;
+      (req as any).userName = (decoded as any).sub;
       (req as any).userRoles = (decoded as any).roles || [];
       req.session.lastPage = req.originalUrl;
       next();
@@ -561,7 +561,7 @@ clientLoginRouter.post('/pre-authorize', async (req: Request, res: Response) => 
     }
   } catch (error: any) {
     console.error('Pre-authorize failed:', error.response?.data || error.message);
-    res.status(401).json({ error: error.response?.data?.message || 'Authentication failed' });
+    res.status(401).json({ error: error.response?.data?.invalid_credentials || 'Authentication failed' });
   }
 });
 
@@ -899,7 +899,7 @@ Extract them in your middleware after verifying the JWT:
 ```typescript
 // In requireAuth middleware — after jwt.verify():
 (req as any).user = decoded;
-(req as any).userId = (decoded as any).sub;                  // internal user ID
+(req as any).userName = (decoded as any).sub;                // userName
 (req as any).userRefId = (decoded as any).user_id;           // your app's userRefId
 (req as any).orgRefId = (decoded as any).org_id;             // your app's orgRefId
 (req as any).userRoles = (decoded as any).roles || [];

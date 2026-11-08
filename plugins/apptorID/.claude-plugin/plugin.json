@@ -1,8 +1,27 @@
 {
   "name": "apptorID",
   "description": "Integrate apptorID (OAuth2/OIDC) authentication into any application. Explores your codebase, provisions apptorID resources via MCP, writes all integration code, and tests it — end to end.",
-  "version": "1.1.1",
+  "version": "2.0.0",
   "author": {
     "name": "Expeed Software"
+  },
+  "userConfig": {
+    "mcp_url": {
+      "type": "string",
+      "title": "apptorID MCP URL",
+      "description": "apptorID MCP endpoint. Keep the sandbox default unless you were given a different one.",
+      "default": "https://master.sandbox.auth.apptor.io/mcp"
+    },
+    "access_key_id": {
+      "type": "string",
+      "title": "Access key ID",
+      "description": "apptorID access key ID"
+    },
+    "access_key_secret": {
+      "type": "string",
+      "title": "Access key secret",
+      "description": "apptorID access key secret",
+      "sensitive": true
+    }
   }
 }

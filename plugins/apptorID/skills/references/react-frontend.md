@@ -29,7 +29,7 @@
 6. [Callback Handler (SPA only)](#callback-handler)
 7. [Protected Route](#protected-route)
 8. [Social Login Buttons](#social-login-buttons)
-9. [Token Refresh (SPA only)](#token-refresh)
+9. [Expired Token Handling (SPA only)](#expired-token-handling)
 
 ---
 
@@ -139,9 +139,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.location.href = `${getRealmBaseUrl()}/oidc/auth?${params.toString()}`;
   }, []);
 
-  const loginWithProvider = useCallback((providerId: string) => {
-    const state = sessionStorage.getItem('oauth_state') || generateSecureRandom();
+  const loginWithProvider = useCallback(async (providerId: string) => {
+    const state = generateSecureRandom();
+    const nonce = generateSecureRandom();
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+
     sessionStorage.setItem('oauth_state', state);
+    sessionStorage.setItem('oauth_nonce', nonce);
+    sessionStorage.setItem('pkce_verifier', codeVerifier);
 
     const params = new URLSearchParams({
       client_id: APPTOR_CLIENT_ID,
@@ -149,6 +155,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       response_type: 'code',
       scope: SCOPES,
       state,
+      nonce,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
       provider_id: providerId,
     });
 
@@ -363,7 +372,7 @@ export function AuthCallback() {
       <div style={{ padding: '2rem', textAlign: 'center' }}>
         <h2>Authentication Error</h2>
         <p style={{ color: 'red' }}>{error}</p>
-        <button onClick={() => navigate('/auth/login')}>Try Again</button>
+        <button onClick={() => navigate(sessionStorage.getItem('redirect_after_login') || '/')}>Try Again</button>
       </div>
     );
   }
@@ -522,7 +531,7 @@ export function LoginPage() {
         window.location.href = exchangeUrl;
       }
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Login failed. Please check your credentials.');
+      setError(err.response?.data?.invalid_credentials || 'Login failed. Please check your credentials.');
     } finally {
       setLoading(false);
     }
@@ -649,9 +658,9 @@ export function SocialLoginButton({ provider, onClick }: SocialLoginButtonProps)
 
 ---
 
-## Token Refresh
+## Expired Token Handling
 
-Axios interceptor for automatic token refresh:
+Axios interceptor that re-runs login on 401 (browser apps cannot use the refresh_token grant):
 
 ```typescript
 // src/auth/apiClient.ts
@@ -676,54 +685,17 @@ export function createAuthenticatedClient(baseURL: string): AxiosInstance {
     return config;
   });
 
-  // On 401, try to refresh the token
+  // On 401, start a new login. apptorID's refresh_token grant requires client_secret,
+  // which a browser must never hold; an active apptorID session makes the re-login silent.
   client.interceptors.response.use(
     (response) => response,
     async (error: AxiosError) => {
-      const originalRequest = error.config as any;
-
-      if (error.response?.status === 401 && !originalRequest._retry) {
-        originalRequest._retry = true;
-
-        const refreshToken = sessionStorage.getItem('refresh_token');
-        if (!refreshToken) {
-          // No refresh token — redirect to login
-          window.location.href = '/auth/login';
-          return Promise.reject(error);
-        }
-
-        try {
-          const params = new URLSearchParams({
-            grant_type: 'refresh_token',
-            refresh_token: refreshToken,
-            client_id: APPTOR_CLIENT_ID,
-          });
-
-          const response = await axios.post(
-            `${getRealmBaseUrl()}/oidc/token`,
-            params.toString(),
-            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-          );
-
-          const { access_token, refresh_token: newRefreshToken } = response.data;
-          sessionStorage.setItem('access_token', access_token);
-          if (newRefreshToken) {
-            sessionStorage.setItem('refresh_token', newRefreshToken);
-          }
-
-          // Retry the original request with new token
-          originalRequest.headers.Authorization = `Bearer ${access_token}`;
-          return client(originalRequest);
-        } catch (refreshError) {
-          // Refresh failed — redirect to login
-          sessionStorage.removeItem('access_token');
-          sessionStorage.removeItem('id_token');
-          sessionStorage.removeItem('refresh_token');
-          window.location.href = '/auth/login';
-          return Promise.reject(refreshError);
-        }
+      if (error.response?.status === 401) {
+        sessionStorage.removeItem('access_token');
+        sessionStorage.removeItem('id_token');
+        sessionStorage.removeItem('refresh_token');
+        window.location.reload();
       }
-
       return Promise.reject(error);
     }
   );

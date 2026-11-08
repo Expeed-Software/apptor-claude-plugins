@@ -24,19 +24,29 @@ claude plugin install https://github.com/expeedsoftware/apptor-claude-plugins/pl
 
 ## Configure
 
-Set your apptorID access key credentials as environment variables:
+When the plugin is enabled, Claude Code asks for three values:
 
-```bash
-export APPTOR_ACCESS_KEY_ID=your-access-key-id
-export APPTOR_ACCESS_KEY_SECRET=your-access-key-secret
-```
+| Option | Notes |
+|---|---|
+| apptorID MCP URL | Defaults to sandbox, `https://master.sandbox.auth.apptor.io/mcp`. Production: `https://master.auth.apptor.io/mcp` |
+| Access key ID | Needed for the MCP tools |
+| Access key secret | Needed for the MCP tools. Masked, kept in Claude Code's credential store, not in `settings.json` |
 
-Optionally, if using production instead of sandbox:
-```bash
-export APPTOR_MCP_URL=https://master.auth.apptor.io/mcp
-```
+No environment variables are needed.
 
-Default MCP URL is `https://master.sandbox.auth.apptor.io/mcp`.
+### Change a value later (e.g. switch sandbox → production, rotate the key)
+
+- **In Claude Code:** `/plugin` → **Installed** → `apptorID` → **Configure options**, edit, then `/reload-plugins`. The URL and key ID can also be edited in `/config`; the secret only through **Configure options**.
+- **From a shell:**
+  ```bash
+  claude plugin configure apptorID@apptor-claude-plugins            # show current options
+  echo '{"mcp_url":"https://master.auth.apptor.io/mcp"}' | claude plugin configure apptorID@apptor-claude-plugins --values-stdin
+  ```
+  Options left out of the JSON keep their values. Restart Claude Code afterwards.
+
+### Upgrading from 1.x
+
+1.1.x read `APPTOR_ACCESS_KEY_ID`, `APPTOR_ACCESS_KEY_SECRET` and `APPTOR_MCP_URL` from the environment. 2.0.0 no longer reads them: enter the values once in **Configure options**, then the environment variables can be removed.
 
 ## Usage
 

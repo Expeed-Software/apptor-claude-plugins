@@ -391,7 +391,7 @@ When a new customer org signs up, your app provisions its realm over the **HTTP 
 
 > Auth note: your access key carries `realm_manage` scoped to your account, so all these calls succeed for any realm under your account. They will 403 if you target another account — which you can't, because the token's `account_id` is fixed.
 
-> Endpoint shapes are authoritative in the live OpenAPI spec (`/swagger/apptor-auth-server-0.5.yml`). The paths below are verified against the server but always cross-check the live spec.
+> Endpoint shapes are authoritative in the live OpenAPI spec (`/swagger/apptor-auth-server-{version}.yml`). The paths below are verified against the server but always cross-check the live spec.
 
 ### Spring Boot example
 
@@ -443,7 +443,7 @@ public class OrgOnboardingService {
         addUrl(token, clientId, "login",    appLoginUrl);
         addUrl(token, clientId, "logout",   appLogoutUrl);
 
-        // 5. Connect IdPs (optional). For microsoft pass tenantId; google needs client id+secret.
+        // 5. Connect IdPs (optional). microsoft/google need the external client id+secret; Microsoft defaults to the 'common' tenant, pass issuer/metadata URLs for a single tenant.
         // for (String idp : idps) addIdpConnection(token, clientId, idp, ...);
 
         // 7. Persist — REQUIRED: realmId + realmName, secret encrypted

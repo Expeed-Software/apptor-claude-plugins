@@ -1,5 +1,7 @@
 # Java Spring Boot — apptorID Integration Templates
 
+> **Offer the apptorID Java SDK first.** `io.apptor.authserver:apptor-authserver-sdk-java` is plain Java (Java 11+, no framework dependency) and works in Spring as-is — wrap `OidcClient` and `AuthServerAdminClient` as `@Bean`s. Coordinates, Gradle setup and client API: `java-micronaut.md` "Option A". The templates below are the manual alternative.
+
 ## Table of Contents
 1. [Dependencies](#dependencies)
 2. [Configuration](#configuration)
@@ -530,7 +532,7 @@ public class ApptorAuthFilter implements Filter {
             try {
                 JWTClaimsSet claims = jwtProcessor.process(token, null);
                 httpRequest.setAttribute("user_claims", claims);
-                httpRequest.setAttribute("user_id", claims.getSubject());
+                httpRequest.setAttribute("user_name", claims.getSubject());
                 if (claims.getClaim("roles") != null) {
                     httpRequest.setAttribute("user_roles", claims.getClaim("roles"));
                 }
@@ -551,7 +553,7 @@ public class ApptorAuthFilter implements Filter {
             try {
                 JWTClaimsSet claims = jwtProcessor.process(accessToken, null);
                 httpRequest.setAttribute("user_claims", claims);
-                httpRequest.setAttribute("user_id", claims.getSubject());
+                httpRequest.setAttribute("user_name", claims.getSubject());
                 session.setAttribute("last_page", path);
                 chain.doFilter(request, response);
                 return;
@@ -656,18 +658,13 @@ public class ClientHostedLoginController {
     @GetMapping("/init")
     public ResponseEntity<Map<String, String>> initLogin(HttpSession session) {
         String state = PkceUtil.generateCodeVerifier().substring(0, 32);
-        String codeVerifier = PkceUtil.generateCodeVerifier();
-        String codeChallenge = PkceUtil.generateCodeChallenge(codeVerifier);
-
         session.setAttribute("oauth_state", state);
-        session.setAttribute("pkce_verifier", codeVerifier);
 
-        // Build the auth URL with PKCE params for client-hosted login
+        // No code_challenge: the callback exchanges the code with client_secret and sends no code_verifier,
+        // and apptorID rejects the exchange (code_verifier_missing) if a challenge was sent.
         String nonce = PkceUtil.generateCodeVerifier().substring(0, 32);
         session.setAttribute("oauth_nonce", nonce);
         String authUrl = oidcClient.buildAuthorizationUrl(state, nonce)
-                + "&code_challenge=" + codeChallenge
-                + "&code_challenge_method=S256"
                 + "&login_uri=" + properties.getRedirectUri().replace("/callback", "/login-page");
 
         return ResponseEntity.ok(Map.of("authUrl", authUrl));
@@ -693,8 +690,7 @@ public class ClientHostedLoginController {
                 .uri(realmBase + "/oidc/pre-authorize")
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .body(BodyInserters.fromFormData(formData))
-                .retrieve()
-                .bodyToMono(JsonNode.class)
+                .exchangeToMono(r -> r.bodyToMono(JsonNode.class))
                 .block();
 
         if (response != null && response.has("preAuthToken")) {
@@ -1115,7 +1111,7 @@ Extract them in your JWT filter after processing the token:
 // In ApptorAuthFilter.doFilter() — after jwtProcessor.process():
 JWTClaimsSet claims = jwtProcessor.process(token, null);
 httpRequest.setAttribute("user_claims", claims);
-httpRequest.setAttribute("sub", claims.getSubject());                    // internal user ID
+httpRequest.setAttribute("sub", claims.getSubject());                    // userName
 httpRequest.setAttribute("user_id", claims.getClaim("user_id"));        // your app's userRefId
 httpRequest.setAttribute("org_id", claims.getClaim("org_id"));          // your app's orgRefId
 if (claims.getClaim("roles") != null) {

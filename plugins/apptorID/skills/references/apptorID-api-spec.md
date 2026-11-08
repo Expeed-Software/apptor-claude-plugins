@@ -1,12 +1,12 @@
 # apptorID API Specification
 
-> **The live OpenAPI spec is the source of truth — this file is a curated quick reference.** Before writing integration code, fetch `https://{realm-authDomain}/swagger/apptor-auth-server-0.5.yml` (or browse `/swagger-ui/`). This file covers the endpoints the plugin uses most, verified against the server source — but when the two disagree, **the live spec wins** and you should flag the drift. Do NOT guess parameter names, endpoint paths, or URL patterns; fetch, then read.
+> **The live OpenAPI spec is the source of truth — this file is a curated quick reference.** Before writing integration code, fetch `https://{realm-authDomain}/swagger/apptor-auth-server-{version}.yml` (or browse `/swagger-ui/`). This file covers the endpoints the plugin uses most, verified against the server source — but when the two disagree, **the live spec wins** and you should flag the drift. Do NOT guess parameter names, endpoint paths, or URL patterns; fetch, then read.
 
 ## OpenAPI / Swagger
 
 The auth server has a live OpenAPI spec:
 - **Swagger UI:** `https://{any-realm-url}/swagger-ui/`
-- **OpenAPI YAML:** `https://{any-realm-url}/swagger/apptor-auth-server-0.5.yml`
+- **OpenAPI YAML:** `https://{any-realm-url}/swagger/apptor-auth-server-{version}.yml` — read the current file name from `https://{any-realm-url}/swagger-ui/index.html`
 
 If you're unsure about any endpoint, parameter, or response format — **check the Swagger UI first.**
 
@@ -16,14 +16,16 @@ If you're unsure about any endpoint, parameter, or response format — **check t
 | Field | Required? | Notes |
 |---|---|---|
 | `firstName` | **MANDATORY** | |
-| `email` | **MANDATORY** | |
-| `accountId` | **MANDATORY** | Account UUID |
-| `appClientId` | **MANDATORY if no password** | Needed for welcome email links. Optional if password is provided in the creation request. |
+| `email` | **MANDATORY unless `phone` + `phonePrefix` given** | Always required for federated users. Decides the notification channel (email if present, else SMS) |
+| `userName` | **MANDATORY** | Not defaulted — pass the email if usernames are emails. Federated users: must equal `email` |
+| `appClientId` | **MANDATORY for local users** | 400 if missing or unknown. Needed for welcome email links. Not used for federated users |
+| `accountId` | optional | Defaults to the admin token's account |
+| `password` | optional | Validated against the realm policy; user becomes active. Not allowed for federated users |
+| `localIdp` | optional | Defaults to `true`. `false` = federated (Google/Microsoft) user: no password, no welcome email |
 | `lastName` | optional | |
-| `userName` | optional | Defaults to email if not provided |
 | `orgRefId` | optional | Maps to `org_id` JWT claim. Include if app uses org-level tenancy. |
 | `userRefId` | optional | Maps to `user_id` JWT claim. Include if app needs a user external ID. |
-| `roles` | optional | Array of `{ "id": "role-uuid" }` |
+| `roles` | optional | Array of `{ "roleName": "...", "resourceServerName": "..." }` (both required per entry) |
 | `phone` | optional | |
 | `phonePrefix` | optional | |
 | `userId` | **NEVER PASS** | Auto-generated |
@@ -40,10 +42,10 @@ If you're unsure about any endpoint, parameter, or response format — **check t
 ### Reset Password (`POST /reset-password`)
 | Field | Required? | Notes |
 |---|---|---|
-| `token` | **MANDATORY** | From email link query param |
+| `token` | **MANDATORY** | From email link query param. Single-use |
 | `password` | **MANDATORY** | New password |
-| `userName` | **MANDATORY** | User's username/email |
 | `appClientId` | **MANDATORY** | From email link query param `client_id` |
+| `userName` | not used | The user is resolved from the token |
 
 ### Admin Token (`POST /oidc/token` with `grant_type=client_credentials`)
 | Field | Required? | Notes |
@@ -199,6 +201,8 @@ Returns:
 
 ### Grant Type: refresh_token
 
+`client_secret` is required — a client without a matching secret (e.g. a browser SPA) cannot refresh; start a new `/oidc/auth` login instead.
+
 ```bash
 curl -X POST https://{realm-url}/oidc/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
@@ -248,7 +252,7 @@ These are the endpoints a SaaS app calls at **customer-onboarding time** (Model 
 
 > **There is NO account-create endpoint in scope.** Apptor provisions accounts and hands over the access key. Do not attempt `POST /accounts` — it requires `master_realm_manage`, which customer keys do not have.
 
-> **Always cross-check against the live OpenAPI** at `/swagger/apptor-auth-server-0.5.yml`. The list below is verified against the server source but the live spec is authoritative.
+> **Always cross-check against the live OpenAPI** at `/swagger/apptor-auth-server-{version}.yml`. The list below is verified against the server source but the live spec is authoritative.
 
 ### Realm
 
@@ -258,14 +262,14 @@ These are the endpoints a SaaS app calls at **customer-onboarding time** (Model 
 | GET | `accounts/{accountId}/realms` | M+R | List realms in the account |
 | GET | `realms/{realmId}` | M+R | Includes password-policy fields |
 | DELETE | `realms/{realmId}` | M+R | Cascade delete |
-| PUT | `realms/{realmId}/password-policy` | M+R | **Password-policy update ONLY** (despite taking a full `Realm` body, only the policy fields are persisted). There is no general realm-update HTTP endpoint. |
+| PUT | `realms/{realmId}/password-policy` | M+R | Persists only the password-policy fields and `allowUserNameChange` (despite taking a full `Realm` body). `defaultPasswordPolicy` is required. There is no general realm-update HTTP endpoint. |
 | GET / PUT | `realms/{realmId}/branding` | M+R | `BrandingConfig` |
 
-**`Realm` DTO fields:** `realmName` (NOT `name`), `authDomain`, `accountId`, `productOwnerRefId`, `defaultPasswordPolicy` (required on create), `passwordMinLength`, `passwordRequiresNumber`, `passwordRequiresSpecialChar`, `passwordRequiresUpperCase`, `passwordRequiresLowerCase`.
+**`Realm` DTO fields:** `realmName` (NOT `name`), `authDomain`, `accountId`, `productOwnerRefId`, `defaultPasswordPolicy` (defaults to `true` on create; when `false`, all five `password*` fields are required), `passwordMinLength`, `passwordRequiresNumber`, `passwordRequiresSpecialChar`, `passwordRequiresUpperCase`, `passwordRequiresLowerCase`, `allowUserNameChange` (lets `PUT .../users/{userName}` change a user's `userName`).
 
 > **Allowed characters (validated server-side — build your forms to match):**
 > - **`authDomain`** — letters, digits, and hyphens only (`^[a-zA-Z0-9-]+$`). It is the subdomain label (e.g. `acme-corp`), so hyphens are valid; do not restrict it to alphanumerics.
-> - **Password** (when `passwordRequiresSpecialChar` is enabled) — the "special character" set is `!@#$%^&*()-_+=[]{}|;:,.<>?/~`. A password may contain **only** letters, digits, and those characters; any other character (double/single quote, backtick, backslash, whitespace, unicode) is rejected server-side with a message naming the offending character.
+> - **Password** — every password may contain **only** letters, digits, and `!@#$%^&*()-_+=[]{}|;:,.<>?/~`, whatever the policy; any other character (double/single quote, backtick, backslash, whitespace, unicode) is rejected server-side with a message naming the offending character. When `passwordRequiresSpecialChar` is enabled, at least one character from that set is required.
 
 ### App Client
 
@@ -292,7 +296,13 @@ These are the endpoints a SaaS app calls at **customer-onboarding time** (Model 
 | GET | `app-clients/{clientId}/app-urls` | M+R | |
 | DELETE | `app-clients/{clientId}/app-urls/{urlType}/url/{url}` | M+R | URL value in path (URL-encode it). Note the path ordering differs from POST. There is no PUT — delete then re-create. |
 
-**Register `login`, `redirect`, `logout` BEFORE testing login.** See hosted-login fallback below.
+**Register `login`, `redirect`, `logout` BEFORE testing login.** Without a `login` URL, a plain `/oidc/auth` fails with `no_login_url_registered`; only `provider_id=local` requests (not `idpClient` apps) and email links fall back to `https://{authDomain}/hosted-login/`.
+
+**Matching rules (multi-tenant / multi-origin apps):**
+- `redirect_uri`, `login_uri` and `post_logout_redirect_uri` must equal a registered URL of that type: whole string, case-insensitive. No wildcards, no prefix matching. Register every tenant origin separately.
+- A registered `https://` URL never accepts `http://`. A registration without a scheme accepts itself and its `https://` form only.
+- `login_uri` selects among several registered login URLs; omitted → the first one.
+- Email links (reset, welcome, login link) always use the app client's FIRST registered `reset_password` / `login` URL. For per-tenant links use one app client per tenant, or `appHandlesNotification=true` and build the link in the app.
 
 ### Identity Provider Connections
 
@@ -321,7 +331,7 @@ These are the endpoints a SaaS app calls at **customer-onboarding time** (Model 
 | GET | `access-keys/{accessKeyId}` | M+R | secret nulled |
 | POST | `access-keys/{accessKeyId}/revoke` | M+R | Destructive; no DELETE |
 
-A newly created access key gets `master_realm_manage` only if created under a user in realm `master` of account `master`; in any other realm it gets **no role by default** and must be granted via `POST /resource-servers/{resourceServerId}/access-keys/{accessKeyId}/roles`.
+A newly created access key gets `master_realm_manage` if created under a user in realm `master` of account `master`, and `realm_manage` if created under a user in realm `master` of any other account; in any other realm it gets **no role by default** and must be granted via `POST /resource-servers/{resourceServerId}/access-keys/{accessKeyId}/roles`.
 
 ### Resource Servers / Roles / Permissions
 
@@ -360,12 +370,13 @@ Authorization: Bearer {admin-token}
 Content-Type: application/json
 ```
 
-**Required fields:**
+**Required fields (local user):**
 ```json
 {
   "firstName": "John",
   "email": "john@company.com",
-  "accountId": "{account-uuid}"
+  "userName": "john@company.com",
+  "appClientId": "{app-client-uuid}"
 }
 ```
 
@@ -373,17 +384,17 @@ Content-Type: application/json
 ```json
 {
   "lastName": "Doe",
-  "userName": "john@company.com",
+  "password": "{initial-password}",
   "orgRefId": "company-123",
   "userRefId": "user-456",
-  "appClientId": "{app-client-uuid}",
-  "roles": [{ "id": "role-uuid" }]
+  "roles": [{ "roleName": "admin", "resourceServerName": "my-api" }]
 }
 ```
 
-**When is `appClientId` needed?**
-- User created WITHOUT password → `appClientId` is REQUIRED. The system sends a welcome/invitation email and needs the app client's registered URLs (login URL, reset password URL) to build the email links.
-- User created WITH password (via MCP `apptorID_set_password` tool — there is no HTTP endpoint for this) → `appClientId` is optional. User is immediately active, no email sent.
+**`appClientId` and the welcome notification:**
+- Local users (`localIdp` omitted or `true`) → `appClientId` is REQUIRED (400 otherwise). A welcome notification is sent, built from the app client's registered URLs, unless `appHandlesNotification=true`.
+- `password` in the body → validated against the realm policy, stored hashed, user is immediately active.
+- Federated users (`localIdp: false`) → `appClientId` not needed, `userName` must equal `email`, no `password`, no notification; user is immediately active.
 
 **Auto-generated fields — NEVER pass these:**
 - `userId` — auto-generated UUID. Do NOT generate or pass a user ID.
@@ -391,7 +402,7 @@ Content-Type: application/json
 - `createdAt`, `updatedAt` — auto-generated timestamps.
 
 **Query parameters:**
-- `appHandlesNotification=true` — if set, returns the invitation token in the response instead of sending email. Use this when the app wants to send its own welcome email.
+- `appHandlesNotification=true` — if set, nothing is sent and the invitation token is returned in the response's `notificationToken` field. Use this when the app wants to send its own welcome email.
 
 ### List Users
 
@@ -428,6 +439,8 @@ DELETE /realms/{realmId}/users/{userName}
 Authorization: Bearer {admin-token}
 ```
 
+**Delete requires a disabled user** ("User should be disabled" otherwise): disable first, then delete. A realm cannot be deleted while it still has users or app clients (foreign keys).
+
 **Note:** User operations use `{userName}` in the path (typically the email), NOT a UUID.
 
 **CRITICAL: `{userName}` MUST be URL-encoded** when used in URL paths. Emails contain `+`, `@`, `.` which are reserved/special characters in URLs. Without encoding, API calls will fail or hit the wrong resource.
@@ -461,7 +474,7 @@ There is a `/secured` variant (`POST /app-clients/{appClientId}/users/{userName}
 **What this does:**
 1. Generates a password reset token
 2. Sends an email to the user with a reset link
-3. The reset link URL is built from the `reset_password` app URL registered for the app client
+3. The reset link URL is built from the `reset_password` app URL registered for the app client, or the hosted reset page if none is registered
 
 **For phone-based reset:**
 ```
@@ -477,40 +490,55 @@ Content-Type: application/json
 {
   "token": "{reset-token-from-email-link}",
   "password": "{new-password}",
-  "userName": "{username}",
   "appClientId": "{app-client-uuid}"
 }
 ```
 
-**All fields are required.**
+**All three fields are required.** The user is resolved from the token, which is single-use; a password that fails the realm policy is rejected without consuming the token. On success the user's sessions are cleared.
 
 ### Set Password (MCP only)
 
-**There is NO HTTP endpoint for set-password.** Use the MCP tool `apptorID_set_password` instead.
+**There is NO HTTP endpoint to set an existing user's password.** Use the MCP tool `apptorID_set_password` instead. (A new user's initial password can be passed as `password` in `POST /realms/{realmId}/users`.)
 
 If the developer's app needs to set a password programmatically via HTTP, use the reset-password flow: trigger forgot-password (or the `/secured` variant with `appHandlesNotification=true` to get the token), then call `POST /reset-password` with the token.
 
 ---
 
-## Reset Password Page — IMPORTANT
+## Reset Password Page
 
-**The auth server's hosted login does NOT have a working reset password page at `/hosted-login/reset-password`.**
+The reset link is `{reset page}?token={reset-token}&client_id={app-client-id}`. The reset page is either:
 
-The developer's app MUST provide its own reset password page. The flow is:
+- **apptorID's hosted reset page** — `https://{realm-authDomain}/hosted-login/?token=...&client_id=...`. It validates the token, enforces the realm's password policy and sets the password. If no `reset_password` URL is registered, apptorID builds reset and welcome email links against this page automatically.
+- **The app's own page** — register it first, then the page reads `token` and `client_id`, shows a "new password" form, calls `POST /reset-password`, and on success redirects to the `post_reset_password` URL.
 
-1. App calls forgot-password API → apptorID sends email to user
-2. Email contains a link to the `reset_password` URL registered for the app client
-3. **That URL MUST point to a page IN THE DEVELOPER'S APP** (e.g., `https://myapp.com/reset-password`)
-4. The page receives `?token={reset-token}&client_id={app-client-id}` as query parameters
-5. The page shows a "new password" form
-6. On submit, the page calls `POST /reset-password` with the token + new password + userName + appClientId
-7. On success, redirect to the `post_reset_password` URL registered for the app client
+**The reset token is opaque — never decode it.** Treat it as a random string: no username, expiry or client id can be read from it. To show the user's name or check the link before showing the form, call:
 
-**App URL types to register via MCP (`apptorID_add_app_urls`):**
-- `reset_password` → `https://myapp.com/reset-password` (the app's own page)
-- `post_reset_password` → `https://myapp.com/login` (redirect after success)
+```
+GET /api/hosted-login/reset-config?token={token}&client_id={client-id}
+```
 
-**If `reset_password` URL is not registered**, the email link will either fail or point to a non-existent page on the auth server. Always register it.
+No auth. Always HTTP 200; the body says whether the link is usable:
+- valid → `{"valid": true, "userName": "...", "passwordPolicy": {...}, "branding": {...}, "realmId": "...", "clientId": "..."}`
+- expired, used, unknown client or inactive user → `{"valid": false, "errorMessage": "..."}` with no `userName`
+
+`userName` in this response comes with apptor-auth-server PR #317; confirm it in the live OpenAPI spec before relying on it, and fall back to not showing a name when it is absent.
+
+**App URL types to register via MCP (`apptorID_add_app_urls`), own page only:**
+- `reset_password` → `https://myapp.com/reset-password`
+- `post_reset_password` → `https://myapp.com/login`
+
+## Who Sends Notification Emails
+
+| | apptorID sends | App sends (`appHandlesNotification=true`) |
+|---|---|---|
+| Transport | SMTP only (SendGrid/SES via SMTP relay only) | Any provider the app chooses |
+| Templates | Stored in apptorID | Owned by the app |
+| Forgot password | Public `.../forgot-password` | `.../forgot-password/secured` → returns reset token |
+| Welcome / invitation | Sent on user creation | `POST /realms/{realmId}/users?appHandlesNotification=true`, then `.../resend-invitation/secured` → returns token |
+| SMS reset | apptorID sends OTP | `.../phone/{phone}/forgot-password/secured` → returns OTP; complete with `POST /reset-password-by-otp` |
+| Login page | Hosted login OK | **Client-hosted login required** (`/oidc/pre-authorize`) |
+
+The `/secured` endpoints need an admin Bearer token (`realm_manage` / `master_realm_manage`). The hosted login page always shows its own "Forgot password?" link, which always makes apptorID send the email — there is no setting to hide it or redirect it — so an app that must own its emails must host its own login page.
 
 ---
 
@@ -536,7 +564,7 @@ GET /hosted-login/
 
 The hosted login is a React SPA. The login URL to register is `https://{realm-url}/hosted-login/`.
 
-**Available pages in hosted login:** Login page only. The hosted login does NOT provide pages for reset-password, signup, or profile management. The app must build these.
+**Available pages in hosted login:** Login (default), Forgot password (`?view=forgot`, sends the email from apptorID) and Reset password (any URL with `?token=...&client_id=...`). No signup or profile pages — the app must build these.
 
 ### Pre-Authorize (client-hosted login — LOCAL username/password ONLY)
 
@@ -549,7 +577,7 @@ username={string}&password={string}
 
 Query params: `client_id`, `redirect_uri`, `scope`, `response_type=code`, `state`, `nonce`, `code_challenge`, `code_challenge_method`
 
-Returns a `preAuthToken` that can be passed to `/oidc/auth?preAuthToken={token}` to skip the login page.
+Returns `{ "preAuthToken": "...", "state": "...", "expiresIn": 60 }`. The `preAuthToken` is passed to `/oidc/auth?...&preAuthToken={token}` to skip the login page. The token is single-use and expires after 60 seconds.
 
 > **`pre-authorize` is for the LOCAL identity provider only.** For Microsoft / Google / other IdP-based logins, do NOT call `pre-authorize`. Instead, redirect the user's browser directly to `GET /oidc/auth?...&provider_id={microsoft|google}` and let apptorID hand off to the upstream IdP. Trying to "pre-authorize" a social login will not work — there are no local credentials to validate.
 
@@ -558,6 +586,10 @@ Returns a `preAuthToken` that can be passed to `/oidc/auth?preAuthToken={token}`
 ```
 GET /oidc/logout?id_token_hint={id_token}&post_logout_redirect_uri={url}&state={state}
 ```
+
+### Custom Token — not recommended (current limitation)
+
+`POST /oidc/custom-token` adds extra form fields as claims to an apptorID-signed token, but a refresh (`/oidc/token`, `grant_type=refresh_token`) rebuilds claims from the database and drops them, and `/oidc/custom-token` does not accept `refresh_token`. Do not build on it. If the app needs its own claims, verify apptorID's tokens at the callback and mint the app's own session/JWT.
 
 ### Revoke Token
 
@@ -592,10 +624,10 @@ apptorID currently supports three identity providers per app client: `local` (us
 | `providerId` | Mandatory fields | Notes |
 |---|---|---|
 | `local` | _(none beyond `clientId` + `providerId`)_ | Built-in username/password |
-| `microsoft` | `externalClientId`, `externalClientSecret` | Pass `tenantId` to single-tenant; defaults to `common` (multi-tenant) when omitted |
-| `google` | `externalClientId`, `externalClientSecret` | |
+| `microsoft` | `externalClientId`, `externalClientSecret` | `issuerUrl`/`metadataUrl` default to the multi-tenant `https://login.microsoftonline.com/common/v2.0` endpoints. For a single tenant, pass `issuerUrl=https://login.microsoftonline.com/{tenant-id}/v2.0` and `metadataUrl={issuerUrl}/.well-known/openid-configuration` |
+| `google` | `externalClientId`, `externalClientSecret` | `issuerUrl`/`metadataUrl` default to Google's |
 
-The MCP tool `apptorID_add_idp_connection` rejects the call with `IllegalArgumentException` if a required field is missing for `microsoft` or `google`. For Microsoft, the server builds `issuerUrl` / `metadataUrl` from the supplied `tenantId` (or `common` if omitted), so there is no `{tenantid}`-style placeholder in the stored value. The tool's response includes the resolved `issuerUrl` and `metadataUrl`.
+The MCP tool `apptorID_add_idp_connection` does **not** reject a missing `externalClientId`/`externalClientSecret` — it stores an empty value and the login then fails at the provider. Always pass both for `microsoft`/`google`. There is no `tenantId` parameter. The tool's response contains `idpConnectionId`, `providerId`, `appClientId` and the vault flags, not the URLs — read them back with `apptorID_get_idp_connections`.
 
 **Optional vault fields (any external `microsoft`/`google`/OIDC provider):** `returnProviderTokens`, `storeProviderTokens`, `providerScopes` — see the "Provider token vault" note under `IdpConnection` DTO fields. Use them only when your backend needs the external provider's own token (e.g. call the provider's APIs as the user); omit them for plain SSO.
 
@@ -629,7 +661,7 @@ GET /oidc/auth?response_type=code
 
 apptorID will redirect the user to the upstream IdP. After successful upstream auth, the user lands back at apptorID's `/oidc/callback/{providerId}`, then is redirected to your app's `redirect_uri` with `?code=...&state=...`.
 
-When the upstream IdP rejects the request, apptorID now 302s the browser back to the original OAuth2 `redirect_uri` with `?error=...&error_description=...&state=...` per RFC 6749 §4.1.2.1. Your callback page should check for `?error=` before attempting code exchange — same pattern you'd use for any standards-compliant OAuth2 provider. If `redirect_uri` cannot be recovered (unknown state), apptorID falls back to HTTP 500.
+Errors raised by `/oidc/auth` itself (e.g. `unsupported_response_type`, `unauthorized_client`) are 302'd back to the `redirect_uri` with `?error=...&state=...`, but only when that `redirect_uri` is registered for the client; otherwise the error is returned directly. Your callback page should check for `?error=` before attempting code exchange. When the **upstream IdP** rejects the login (user cancels, consent denied), apptorID's `/oidc/callback/{providerId}` returns HTTP 500 "Failed to authenticate" and does not redirect back to the app.
 
 ---
 
@@ -642,18 +674,20 @@ Register via MCP (`apptorID_add_app_urls`):
 | `login` | Hosted login page URL | `https://{realm-url}/hosted-login/` |
 | `logout` | Post-logout redirect | `https://myapp.com/` |
 | `redirect` | OAuth callback URL | `https://myapp.com/auth/callback` |
-| `reset_password` | Password reset page (IN THE APP) | `https://myapp.com/reset-password` |
+| `reset_password` | The app's own password reset page. If unregistered, links use the hosted reset page | `https://myapp.com/reset-password` |
 | `post_reset_password` | Redirect after password reset | `https://myapp.com/login` |
 
 ---
 
 ## JWT Token Claims
 
-Standard claims: `sub`, `iss`, `aud`, `exp`, `iat`, `email`, `name`, `roles`
+Standard claims: `sub` (the userName, not a UUID), `iss`, `aud`, `exp`, `iat`, `email`, `name`, `given_name`, `family_name`, `nonce` (ID token), `scope`
 
-Custom claims from orgRefId/userRefId:
+Custom claims: `user_name`, `app_client_id`, `roles`, `account_id`, `resource_server_id`, `product_owner_ref_id`, plus (present only when set):
 - `org_id` → value of `orgRefId` set during user creation
 - `user_id` → value of `userRefId` set during user creation
+
+There is no `realm_id` claim.
 
 ---
 
@@ -661,11 +695,11 @@ Custom claims from orgRefId/userRefId:
 
 1. **NEVER use camelCase in form-encoded params.** It's `access_key_id`, NOT `accessKeyId`.
 2. **NEVER pass a `userId` in user creation.** It's auto-generated.
-3. **NEVER assume hosted login has a reset password page.** Build your own.
+3. **The hosted login HAS a reset password page.** Build your own only for custom UI, and register it as `reset_password`.
 4. **NEVER call forgot-password without `appClientId` in the path.** The endpoint is `/app-clients/{appClientId}/users/{userName}/forgot-password`.
 5. **ALWAYS use the created realm URL** for integration code, not the master URL.
-6. **ALWAYS register app URLs** (`reset_password`, `post_reset_password`, `redirect`, `login`, `logout`) before the flows that need them.
+6. **ALWAYS register app URLs** (`redirect`, `login`, `logout`, plus `reset_password`/`post_reset_password` when the app has its own reset page) before the flows that need them.
 7. **User endpoints use `{userName}` in the path**, not a UUID. userName is typically the email.
-8. **`apptorID_add_idp_connection` enforces required fields for microsoft/google** — the call fails if `externalClientId` / `externalClientSecret` are missing. For Microsoft, pass `tenantId` so the issuer/metadata URLs are scoped to your tenant (defaults to `common` multi-tenant otherwise). Verify the response's resolved `issuerUrl` / `metadataUrl`.
+8. **ALWAYS pass `externalClientId` / `externalClientSecret` to `apptorID_add_idp_connection` for microsoft/google** — the tool does not reject them missing; login fails later instead. For a single Microsoft tenant, pass tenant-specific `issuerUrl` / `metadataUrl` (default is `common`). Verify with `apptorID_get_idp_connections`.
 9. **NEVER use `pre-authorize` for Microsoft/Google login.** It is local-username/password only. For IdP logins, redirect directly to `/oidc/auth?...&provider_id={microsoft|google}`.
 10. **ALWAYS register the IdP redirect URI in Azure / Google** before testing the flow: `https://{realm-auth-domain}/oidc/callback/{providerId}`. apptorID does not surface this URI in any tool response.

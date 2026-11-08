@@ -133,9 +133,15 @@ export class AuthService {
   /**
    * Redirect to external IdP (Google, Microsoft).
    */
-  loginWithProvider(providerId: string): void {
-    const state = sessionStorage.getItem('oauth_state') || this.generateSecureRandom();
+  async loginWithProvider(providerId: string): Promise<void> {
+    const state = this.generateSecureRandom();
+    const nonce = this.generateSecureRandom();
+    const codeVerifier = this.generateCodeVerifier();
+    const codeChallenge = await this.generateCodeChallenge(codeVerifier);
+
     sessionStorage.setItem('oauth_state', state);
+    sessionStorage.setItem('oauth_nonce', nonce);
+    sessionStorage.setItem('pkce_verifier', codeVerifier);
 
     const params = new URLSearchParams({
       client_id: environment.apptorClientId,
@@ -143,6 +149,9 @@ export class AuthService {
       response_type: 'code',
       scope: environment.scopes,
       state,
+      nonce,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
       provider_id: providerId,
     });
 
@@ -190,28 +199,9 @@ export class AuthService {
    * Refresh the access token.
    */
   async refreshAccessToken(): Promise<string | null> {
-    const refreshToken = sessionStorage.getItem('refresh_token');
-    if (!refreshToken) return null;
-
-    try {
-      const body = new HttpParams()
-        .set('grant_type', 'refresh_token')
-        .set('refresh_token', refreshToken)
-        .set('client_id', environment.apptorClientId);
-
-      const tokens = await this.http
-        .post<TokenResponse>(`${environment.apptorRealmUrl}/oidc/token`, body.toString(), {
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        })
-        .toPromise();
-
-      if (tokens) {
-        this.storeTokens(tokens);
-        return tokens.access_token;
-      }
-    } catch {
-      this.logout();
-    }
+    // apptorID's refresh_token grant requires client_secret, which a browser must never hold;
+    // re-run login instead — an active apptorID session makes it silent.
+    await this.login();
     return null;
   }
 
@@ -544,7 +534,7 @@ export class LoginComponent {
           `&preAuthToken=${response.preAuthToken}`;
       }
     } catch (err: any) {
-      this.error = err.error?.message || 'Login failed';
+      this.error = err.error?.invalid_credentials || 'Login failed';
     } finally {
       this.loading = false;
     }

@@ -113,7 +113,7 @@ Tool: apptorID_add_app_urls
 | `redirect` | App's OAuth callback (e.g., `/auth/callback`) | MANDATORY for login flow |
 | `login` | `https://{authDomain}/hosted-login/` for hosted login, OR app's login page URL | MANDATORY |
 | `logout` | App's home page or login page | MANDATORY for logout flow |
-| `reset_password` | App's reset password page (e.g., `/reset-password`). **NOT the auth server — it has no reset page.** | Needed for forgot-password flow |
+| `reset_password` | App's own reset password page (e.g., `/reset-password`). If unregistered, links fall back to the hosted reset page `https://{authDomain}/hosted-login/`. | Only if the app has its own reset page |
 | `post_reset_password` | Where to redirect after successful password reset (e.g., `/login`) | Needed for forgot-password flow |
 
 > **Note:** The MCP tool description only lists redirect/login/logout/reset_password, but `post_reset_password` also works.
@@ -175,7 +175,7 @@ Tool: apptorID_forgot_password
 ```
 
 **Prerequisites:**
-- `reset_password` app URL must be registered for this app client (pointing to the APP's reset page, not the auth server)
+- `reset_password` app URL registered only if the app has its own reset page; otherwise the link goes to the hosted reset page
 - Email config must be set up (or default SMTP fallback)
 
 ### Manage Roles & Permissions
@@ -201,7 +201,7 @@ Tool: apptorID_add_idp_connection
   ...provider-specific fields below...
 ```
 
-**The server now rejects microsoft/google connections that omit `externalClientId` or `externalClientSecret`** — the call fails with `IllegalArgumentException` instead of silently succeeding. You still must pass the right fields:
+**The server does NOT validate microsoft/google credentials** — a connection created without `externalClientId` or `externalClientSecret` is saved, then fails at login. Always pass both:
 
 **For `providerId: "microsoft"`:**
 
@@ -209,11 +209,10 @@ Tool: apptorID_add_idp_connection
 |---|---|---|
 | `externalClientId` | **MANDATORY** | The Application (client) ID from your Azure app registration |
 | `externalClientSecret` | **MANDATORY** | The client secret value from Azure (not the secret ID) |
-| `tenantId` | recommended | The Azure tenant UUID. The server substitutes it into the issuer/metadata URLs. Omit only if you genuinely want the multi-tenant `common` endpoint. |
-| `issuerUrl` | optional | Auto-filled to `https://login.microsoftonline.com/{tenantId or 'common'}/v2.0`. Pass explicitly only to override. |
-| `metadataUrl` | optional | Auto-filled to the matching `/.well-known/openid-configuration`. |
+| `issuerUrl` | optional | Defaults to the multi-tenant `https://login.microsoftonline.com/common/v2.0`. For a single Azure tenant pass `https://login.microsoftonline.com/{tenantId}/v2.0`. There is no `tenantId` parameter. |
+| `metadataUrl` | optional | Defaults to the `common` `/.well-known/openid-configuration`. For a single tenant pass `https://login.microsoftonline.com/{tenantId}/v2.0/.well-known/openid-configuration`. |
 
-The response now includes the resolved `issuerUrl` and `metadataUrl` — verify they contain the expected tenant UUID before proceeding.
+The response does not include the issuer/metadata URLs — check them with `apptorID_get_idp_connections`.
 
 **For `providerId: "google"`:**
 
@@ -246,7 +245,7 @@ Example: `https://acme-x1y2.sandbox.auth.apptor.io/oidc/callback/microsoft`
 
 Verify by calling `apptorID_get_idp_connections` after creation and confirm the connection has the external fields populated.
 
-**Verifying the IdP works:** Start a login from your app with `prompt=login` (or via the hosted login). The redirect should land on Microsoft/Google. If the upstream IdP rejects the request, the server now 302s back to your original OAuth2 `redirect_uri` with `?error=...&error_description=...&state=...` (per RFC 6749 §4.1.2.1) — read those params on your callback page to surface the failure.
+**Verifying the IdP works:** Start a login from your app with `prompt=login` (or via the hosted login). The redirect should land on Microsoft/Google. If the upstream IdP rejects the request, the auth server's callback returns an error itself; the browser is not redirected back to your `redirect_uri`, so check the error shown on the auth server page.
 
 ### Create Access Keys
 
@@ -266,6 +265,8 @@ All tool names are prefixed with `apptorID_`:
 |---|---|
 | **Setup** | `full_setup` |
 | **Realms** | `list_realms`, `create_realm`, `get_realm`, `update_realm`, `delete_realm`, `configure_password_policy` |
+
+> **Teardown order:** `delete_realm` fails while the realm still has users or app clients. `delete_user` fails with "User should be disabled" unless the user is disabled first, and there is NO MCP disable tool: disable over HTTP (`PUT /realms/{realmId}/users/{userName}/disable`, admin token), then `delete_user`, then `delete_app_client`, then `delete_realm`.
 | **App Clients** | `list_app_clients`, `create_app_client`, `get_app_client`, `update_app_client`, `delete_app_client`, `reset_client_secret` |
 | **App URLs** | `list_app_urls`, `add_app_urls`, `delete_app_url` |
 | **IdPs** | `list_identity_providers`, `add_idp_connection`, `get_idp_connections`, `remove_idp_connection` |
@@ -298,10 +299,10 @@ All tool names are prefixed with `apptorID_`:
 
 ## Key Details
 
-- **Hosted login URL:** Register your real `login` URL (for hosted login, `https://{authDomain}/hosted-login/`). If none is registered, the server falls back to the hosted SPA for `login`/`reset_password` only — but register explicitly so the fallback doesn't mask a missing URL during testing.
-- **Hosted login has NO reset password page.** The app must build its own. Register the app's reset page as `reset_password` type.
+- **Hosted login URL:** Always register a `login` URL (for hosted login, `https://{authDomain}/hosted-login/`). Without one, a plain `/oidc/auth` fails with `no_login_url_registered`; only `provider_id=local` requests and email links fall back to the hosted SPA.
+- **Hosted login includes Forgot password and Reset password pages.** Register a `reset_password` URL only if the app builds its own reset page.
 - **Default SMTP:** Works without email config. Fallback: realm → account → master.
-- **User with password:** ACTIVE immediately, no email sent. Without password (MCP) → FORCE_PASSWORD_CHANGE status, no email sent (MCP bypasses notifications).
+- **MCP `create_user`:** with password → ACTIVE; without → FORCE_PASSWORD_CHANGE. Neither sends an email. The HTTP API (`POST /realms/{realmId}/users`) sends a welcome email for every local user unless `appHandlesNotification=true`.
 - **clientSecret shown only once** at app client creation. Save it immediately.
 - **accessKeySecret shown only once** at access key creation. Save it immediately.
 - MCP not available → tell user to use apptorID Admin UI.
