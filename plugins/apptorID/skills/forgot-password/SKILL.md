@@ -149,6 +149,8 @@ Content-Type: application/json
 - The reset page is either apptorID's hosted one (`https://{realm-authDomain}/hosted-login/?token=...&client_id=...`) or a frontend page in the developer's app
 - Google/Microsoft (federated) users have no apptorID password. The `/secured` forgot-password route returns 400 for them, so show "sign in with your identity provider". The public route returns 400 on older servers and a silent 200 after the admin-API fix release, so never treat its response as proof the account exists
 - `/reset-password` reads only `token`, `password` and `appClientId`; the user comes from the token. The token is single-use, but a password that fails policy does not consume it
+- Resets are limited to 5 per user per hour (default), shared by the username and phone routes and by the public and `/secured` variants. Over the limit the public route still returns 200 and sends nothing, so keep the "if the account exists, we sent an email" message; the `/secured` route (Mode 2) returns 429 with `Retry-After`, so the generated endpoint must map 429 to "Too many reset requests, try again later" and must not retry
+- SMS OTP resets (`/phone/{phone}/forgot-password/secured`) use the same reset limit; one-time codes for passwordless sign-in have their own limit of 5 per user per 15 minutes and also return 429
 
 ## Reference Files
 

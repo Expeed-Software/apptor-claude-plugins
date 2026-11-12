@@ -561,6 +561,11 @@ clientLoginRouter.post('/pre-authorize', async (req: Request, res: Response) => 
     }
   } catch (error: any) {
     console.error('Pre-authorize failed:', error.response?.data || error.message);
+    if (error.response?.status === 429) {
+      const retryAfter = error.response.headers?.['retry-after'];
+      if (retryAfter) res.set('Retry-After', retryAfter);
+      return res.status(429).json({ error: 'too_many_attempts', message: 'Too many attempts. Try again later.' });
+    }
     res.status(401).json({ error: error.response?.data?.invalid_credentials || 'Authentication failed' });
   }
 });

@@ -519,6 +519,13 @@ async def pre_authorize(request: Request):
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
+    if response.status_code == 429:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many attempts. Try again later.",
+            headers={"Retry-After": response.headers.get("Retry-After", "900")},
+        )
+
     result = response.json()
     if "preAuthToken" in result:
         exchange_url = (

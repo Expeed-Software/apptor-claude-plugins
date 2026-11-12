@@ -534,7 +534,12 @@ export class LoginComponent {
           `&preAuthToken=${response.preAuthToken}`;
       }
     } catch (err: any) {
-      this.error = err.error?.invalid_credentials || 'Login failed';
+      if (err.status === 429) {
+        const minutes = Math.ceil(Number(err.headers?.get('Retry-After') ?? 900) / 60);
+        this.error = `Too many attempts. Try again in ${minutes} minute(s).`;
+      } else {
+        this.error = err.error?.invalid_credentials || 'Login failed';
+      }
     } finally {
       this.loading = false;
     }

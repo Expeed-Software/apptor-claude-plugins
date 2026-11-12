@@ -531,7 +531,12 @@ export function LoginPage() {
         window.location.href = exchangeUrl;
       }
     } catch (err: any) {
-      setError(err.response?.data?.invalid_credentials || 'Login failed. Please check your credentials.');
+      if (err.response?.status === 429) {
+        const minutes = Math.ceil(Number(err.response.headers?.['retry-after'] ?? 900) / 60);
+        setError(`Too many attempts. Try again in ${minutes} minute(s).`);
+      } else {
+        setError(err.response?.data?.invalid_credentials || 'Login failed. Please check your credentials.');
+      }
     } finally {
       setLoading(false);
     }

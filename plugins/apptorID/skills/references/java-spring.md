@@ -686,13 +686,21 @@ public class ClientHostedLoginController {
                 ? properties.getRealmUrl()
                 : "https://" + properties.getRealmUrl();
 
-        JsonNode response = webClient.post()
+        ResponseEntity<JsonNode> entity = webClient.post()
                 .uri(realmBase + "/oidc/pre-authorize")
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .body(BodyInserters.fromFormData(formData))
-                .exchangeToMono(r -> r.bodyToMono(JsonNode.class))
+                .exchangeToMono(r -> r.toEntity(JsonNode.class))
                 .block();
 
+        if (entity != null && entity.getStatusCode().value() == 429) {
+            String retryAfter = entity.getHeaders().getFirst("Retry-After");
+            return ResponseEntity.status(429)
+                    .header("Retry-After", retryAfter != null ? retryAfter : "900")
+                    .body(Map.of("error", "too_many_attempts", "message", "Too many attempts. Try again later."));
+        }
+
+        JsonNode response = entity == null ? null : entity.getBody();
         if (response != null && response.has("preAuthToken")) {
             // Return the exchange URL for the frontend to redirect to
             String exchangeUrl = realmBase + "/oidc/auth"

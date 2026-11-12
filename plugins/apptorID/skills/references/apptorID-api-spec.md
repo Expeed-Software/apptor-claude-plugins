@@ -224,6 +224,9 @@ curl -X POST https://{realm-url}/oidc/token \
   -d "client_secret={string}"
 ```
 
+- If the user's credentials are sent in `Authorization: Basic base64(username:password)` instead, the token is issued for that user. A body `username` that names a different user returns **401**; omit it or send the same username.
+- Repeated failures lock the username: **429** `too_many_attempts` with `Retry-After` (see "Lockout" under pre-authorize).
+
 ### Grant Type: token-exchange (RFC 8693 — get/refresh a provider token)
 
 Exchange an Apptor ID token for the **external provider's** token held in the vault (requires the IdP connection's `storeProviderTokens=true`). The provider token is auto-refreshed if expired — you never call a separate refresh endpoint.
@@ -475,6 +478,8 @@ There is a `/secured` variant (`POST /app-clients/{appClientId}/users/{userName}
 
 **Unknown user:** older servers return 500 `User not found`; after the admin-API fix release the public route returns 200 (no account enumeration) and `/secured` returns 404. Show the same "if the account exists, we sent an email" message for any non-200/400 response. A Google/Microsoft user returns 400 on `/secured`; on the public route, 400 on older servers and a silent 200 after the fix release (unknown, disabled and federated users all look the same).
 
+**Rate limit:** at most 5 reset messages per user per hour (default), shared by the username, email and phone routes and by the public and `/secured` variants. Over the limit the public route still returns 200 but sends nothing; `/secured` returns **429** with `Retry-After` and `{"error":"too_many_attempts"}`, also for unknown users. The MCP tool `apptorID_forgot_password` returns an error with the seconds to wait. Show "please try again later" on 429.
+
 **What this does:**
 1. Generates a password reset token
 2. Sends an email to the user with a reset link
@@ -484,6 +489,8 @@ There is a `/secured` variant (`POST /app-clients/{appClientId}/users/{userName}
 ```
 POST /app-clients/{appClientId}/phone-prefix/{phonePrefix}/phone/{phone}/forgot-password
 ```
+
+Phone resets count against the same per-user reset limit. One-time codes are limited separately: at most 5 per user per 15 minutes (default) across `POST /oidc/passwordless/start` (email and SMS) and `POST /app-clients/{appClientId}/phone-prefix/{p}/phone/{phone}/status?sendOtp=true`; over the limit they return **429** with `Retry-After`.
 
 ### Reset Password (user submits new password)
 
@@ -543,7 +550,7 @@ No auth. Always HTTP 200; the body says whether the link is usable:
 | SMS reset | apptorID sends OTP | `.../phone/{phone}/forgot-password/secured` → returns OTP; complete with `POST /reset-password-by-otp` |
 | Login page | Hosted login OK | **Client-hosted login required** (`/oidc/pre-authorize`) |
 
-The `/secured` endpoints need an admin Bearer token (`realm_manage` / `master_realm_manage`). The hosted login page always shows its own "Forgot password?" link, which always makes apptorID send the email — there is no setting to hide it or redirect it — so an app that must own its emails must host its own login page.
+The `/secured` endpoints need an admin Bearer token (`realm_manage` / `master_realm_manage`). The `/secured` reset and OTP endpoints return **429** with `Retry-After` once the user's limit is used up (5 resets per hour, 5 codes per 15 minutes by default); the app should show "try again later" rather than retry. The hosted login page always shows its own "Forgot password?" link, which always makes apptorID send the email — there is no setting to hide it or redirect it — so an app that must own its emails must host its own login page.
 
 ---
 
@@ -586,7 +593,8 @@ Returns `{ "preAuthToken": "...", "state": "...", "expiresIn": 60 }`. The `preAu
 
 - `scope` must contain `openid` here **and** on `/oidc/auth`; both return 400 without it.
 - An unregistered `redirect_uri` returns 400 `invalid_redirect_url`. Matching ignores case but not `http` vs `https` or a trailing `/`.
-- Credential failures are always 401: `{"error":"invalid_credentials"}` (wrong password, disabled user, Google/Microsoft-only user) or `{"error":"password_setup_incomplete"}` (user has not set a password yet). There is no 403 or 429.
+- Credential failures are 401: `{"error":"invalid_credentials"}` (wrong password, disabled user, Google/Microsoft-only user) or `{"error":"password_setup_incomplete"}` (user has not set a password yet). There is no 403.
+- **Lockout (429):** after 10 failed password checks for a username within 15 minutes, `/oidc/pre-authorize`, `/oidc/login`, `/oidc/token` (password grant) and `/oidc/custom-token` return **429** with a `Retry-After` header (seconds) and `{"error":"too_many_attempts"}` for 15 minutes, even when the password is correct. Unknown usernames are counted the same way, and a successful sign-in resets the count. Show "Too many attempts, try again in N minutes" from `Retry-After`; never retry automatically.
 
 > **`pre-authorize` is for the LOCAL identity provider only.** For Microsoft / Google / other IdP-based logins, do NOT call `pre-authorize`. Instead, redirect the user's browser directly to `GET /oidc/auth?...&provider_id={microsoft|google}` and let apptorID hand off to the upstream IdP. Trying to "pre-authorize" a social login will not work — there are no local credentials to validate.
 
