@@ -203,6 +203,8 @@ Returns:
 
 `client_secret` is required — a client without a matching secret (e.g. a browser SPA) cannot refresh; start a new `/oidc/auth` login instead.
 
+A refresh token works only for the app client it was issued to; another client presenting it gets 401 (empty body) and the token stays valid for its own client. Never share refresh tokens between app clients.
+
 ```bash
 curl -X POST https://{realm-url}/oidc/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
@@ -576,7 +578,7 @@ GET /hosted-login/
 
 The hosted login is a React SPA. The login URL to register is `https://{realm-url}/hosted-login/`.
 
-**Available pages in hosted login:** Login (default), Forgot password (`?view=forgot`, sends the email from apptorID) and Reset password (any URL with `?token=...&client_id=...`). No signup or profile pages — the app must build these.
+**Available pages in hosted login:** Login (default, with "Email me a sign-in link" when magic link is enabled), Forgot password (`?view=forgot`, sends the email from apptorID), Reset password (any URL with `?token=...&client_id=...`) and the magic link landing page (`?view=magic&token=...`). The pages refuse to load inside a frame (`X-Frame-Options: DENY`). No signup or profile pages — the app must build these.
 
 ### Pre-Authorize (client-hosted login — LOCAL username/password ONLY)
 
@@ -598,15 +600,79 @@ Returns `{ "preAuthToken": "...", "state": "...", "expiresIn": 60 }`. The `preAu
 
 > **`pre-authorize` is for the LOCAL identity provider only.** For Microsoft / Google / other IdP-based logins, do NOT call `pre-authorize`. Instead, redirect the user's browser directly to `GET /oidc/auth?...&provider_id={microsoft|google}` and let apptorID hand off to the upstream IdP. Trying to "pre-authorize" a social login will not work — there are no local credentials to validate.
 
+### Magic Link (email sign-in link, off by default)
+
+Passwordless sign-in that ends in the same authorization code as a password login, so the callback and token exchange are unchanged.
+
+**Enable it first.** `magicLinkEnabled: true` in the branding (login-page config) of the realm or of the app client; the app client's value overrides the realm's. Admin UI: Branding → Content → **Email sign-in link**. API: `PUT /realms/{realmId}/branding` or `PUT /app-clients/{clientId}/branding` with the full branding object (read it with `GET` first). There is no MCP tool for it. While it is off every call below answers `400 {"error":"magic_link_disabled"}`.
+
+**1. Start** (browser or backend):
+
+```
+POST /oidc/passwordless/start
+Content-Type: application/x-www-form-urlencoded
+
+type=link&notification_channel=email&email={email}&client_id={uuid}&redirect_uri={registered redirect}&response_type=code&scope=openid&state={random}
+```
+
+Optional: `nonce`, `code_challenge`, `code_challenge_method`. Returns `200 {"transactionId":"...","expiresIn":600}`, identical for known and unknown emails, so always show "check your email". apptorID emails a link and a 6-digit code. An unregistered `redirect_uri` is 400 `invalid_redirect_url`; a `type` other than `otp` or `link` is 400 `invalid_request`. Leaving `type` out still means SMS/email OTP, unchanged.
+
+**2. The user finishes one of two ways:**
+
+- **Link.** It opens apptorID's page `https://{realm-url}/hosted-login/?view=magic&token=...` ("Sign in as j***@example.com") with one button; the button sends the browser to `{redirect_uri}?code=...&state=...`. Opening the link does not use it up (mail scanners are harmless); the button works once. The app builds nothing for this path.
+- **Code.** The app's page collects the 6 digits:
+  ```
+  POST /oidc/magic-link/verify-code
+  Content-Type: application/x-www-form-urlencoded
+
+  client_id={uuid}&transaction_id={transactionId}&code={6 digits}
+  ```
+  Returns `{"preAuthToken":"...","state":"...","expiresIn":60}`; then redirect to `/oidc/auth?...&preAuthToken={token}` exactly as after pre-authorize. Wrong code: `401 {"error":"invalid_code"}`. Five wrong codes end the transaction; ten wrong codes for one email in 15 minutes block typed codes for that email (the link still works).
+
+**3. Exchange the `code`** at `/oidc/token` (or `/oidc/custom-token`) as usual, with `code_verifier` if a challenge was sent at start.
+
+**Limits and errors:** at most 5 sends per recipient per 15 minutes (per-realm `codeSendLimit`), then `429 {"error":"too_many_attempts"}`. A user with MFA still completes MFA. An invited user who signs in this way becomes `active` without having set a password.
+
+**App sends the email itself** (backend, admin token):
+
+```
+POST /app-clients/{clientId}/users/{userName}/magic-link/secured?appHandlesNotification=true
+Content-Type: application/x-www-form-urlencoded
+
+redirect_uri={registered redirect}&scope=openid&state={random}
+```
+
+Returns `{"link":"...","code":"...","transactionId":"...","expiresIn":600}` and sends nothing. Without `appHandlesNotification=true` apptorID sends the email and returns only `transactionId` and `expiresIn`. Note the form body: this one admin endpoint does not take JSON.
+
+**Email template:** type `magic_link`, placeholders `{{link}}`, `{{code}}`, `{{expiry}}` (minutes), `{{user_name}}`. A saved template whose body has no `{{link}}` is ignored and the built-in email is sent.
+
+**Hosted login** shows "Email me a sign-in link" under the password form when the feature is on.
+
 ### Logout
 
 ```
 GET /oidc/logout?id_token_hint={id_token}&post_logout_redirect_uri={url}&state={state}
 ```
 
-### Custom Token — not recommended (current limitation)
+### Custom Token (app-specific claims in apptorID's tokens, backend only)
 
-`POST /oidc/custom-token` adds extra form fields as claims to an apptorID-signed token, but a refresh (`/oidc/token`, `grant_type=refresh_token`) rebuilds claims from the database and drops them, and `/oidc/custom-token` does not accept `refresh_token`. Do not build on it. If the app needs its own claims, verify apptorID's tokens at the callback and mint the app's own session/JWT.
+```
+POST /oidc/custom-token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code&code={code}&redirect_uri={url}&client_id={uuid}&client_secret={string}&tenant_plan=gold&org_unit=42
+```
+
+Every extra form field becomes a string claim in the access and ID tokens. The claims are stored with the refresh token and reapplied on every `/oidc/token` refresh, including after rotation.
+
+- **Change claims later:** `POST /oidc/custom-token` with `grant_type=refresh_token`, `refresh_token`, client credentials and the fields to change. A field you send replaces the stored claim of that name; claims you do not send are kept. Leaving a field out does **not** remove it: to withdraw a claim send it with a neutral value, or have the user sign in again.
+- **The client secret is always required**, also when the code was issued with PKCE (then send `code_verifier` too). Without it: 401. Never call this from a browser.
+- Protocol fields (`code_verifier`, `redirect_uri`, `scope`, `client_id`, `app_client_id`, ...) and apptorID's own claims (`sub`, `iss`, `aud`, `exp`, `roles`, ...) cannot be set or overridden.
+- The stored set is limited to 4096 bytes: `400 {"message":"custom_claims_too_large"}`.
+- `grant_type=password` also works here (claims are in the tokens; that grant returns no refresh token).
+- Never put secrets in claims; whoever holds the token can read them.
+
+Use this when the API should trust apptorID's tokens and only needs a few extra claims. If the app needs its own expiry, keys or session rules, mint its own session/JWT at the callback instead.
 
 ### Revoke Token
 

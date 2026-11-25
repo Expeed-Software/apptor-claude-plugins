@@ -185,7 +185,7 @@ Never use both. Never send client_secret from the browser.
 
 ## Token Refresh
 
-**The `refresh_token` grant requires `client_secret`** — a public client (pure SPA, no secret) cannot refresh; it re-runs the authorization flow instead (silent while the apptorID session is alive).
+**The `refresh_token` grant requires `client_secret`** — a public client (pure SPA, no secret) cannot refresh; it re-runs the authorization flow instead (silent while the apptorID session is alive). A refresh token is bound to the app client it was issued to: any other client gets 401. Claims added through `/oidc/custom-token` are kept across refreshes.
 
 ```
 POST {realm}/oidc/token
@@ -344,7 +344,7 @@ The `/oidc/auth` endpoint accepts an optional `login_uri` query parameter:
   "claims_supported": ["sub"],
   "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
   "subject_types_supported": ["public"],
-  "grant_types_supported": ["authorization_code", "client_credentials", "password", "refresh_token", "passwordless_otp", "token_exchange", "urn:ietf:params:oauth:grant-type:token-exchange"]
+  "grant_types_supported": ["authorization_code", "client_credentials", "password", "refresh_token", "passwordless_otp", "urn:ietf:params:oauth:grant-type:token-exchange"]
 }
 ```
 

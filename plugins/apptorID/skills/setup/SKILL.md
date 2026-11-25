@@ -71,6 +71,7 @@ Do NOT guess parameter names or endpoint paths from memory. Fetch, then read.
    (A) **Hosted login** — redirect to apptorID's hosted login page (no login UI in your app)
    (B) **In-app login page** — build a login form in your app that calls apptorID's pre-authorize endpoint (LOCAL username/password only — IdP flows do NOT use pre-authorize)
    (C) **Use your existing login page** — I found [page] in your repo, integrate apptorID into it"
+   Passwordless email sign-in (magic link: an emailed link plus a 6-digit code) works with any of these and is off by default. Offer it only if the user asks for passwordless or email-link sign-in; then follow "Magic Link" in `apptorID-api-spec.md` (it must be switched on in the realm's or app client's branding, which no MCP tool does).
    **Wait for the user's answer. Do NOT proceed without it.**
 6. **Ask WHERE ROLES AND PERMISSIONS ARE MANAGED** — "Where should your app's roles/permissions live?
    (A) **In apptorID** — I create a resource server for your API, its roles and permissions, and assign roles to users; they arrive in the token's `roles` claim (with `resource_server_id`) and your API checks them. Admins manage them through apptorID (MCP or admin API) or a screen in your app that calls that API.
@@ -80,7 +81,7 @@ Do NOT guess parameter names or endpoint paths from memory. Fetch, then read.
 7. **Ask WHO ISSUES THE TOKENS YOUR API ACCEPTS** — "Which token should your API trust?
    (A) **apptorID's tokens as-is** — validate apptorID's JWT (JWKS) on every request (default).
    (B) **Your own token** — apptorID authenticates; your backend verifies the apptorID tokens once at callback, then mints and signs its own session token/JWT with your own key, expiry and refresh. Your API then validates only your token; logout must clear both your session and apptorID's (`/oidc/logout`)."
-   Do NOT offer `/oidc/custom-token` for app-specific claims: refresh drops those claims (current server limitation). If the app needs its own claims, that is option (B).
+   If (A) and the API needs a few app-specific claims in the token (plan, org unit), the backend can exchange the code at `/oidc/custom-token` instead of `/oidc/token`: the claims survive refresh (see "Custom Token" in `apptorID-api-spec.md`). If the app needs its own expiry, signing key or session rules, that is option (B).
 8. **Confirm the integration approach** — summarize what you will build and where, get user approval
 9. **Only then start writing code**
 
