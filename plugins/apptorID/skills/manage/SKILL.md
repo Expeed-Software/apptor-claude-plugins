@@ -260,6 +260,23 @@ Verify by calling `apptorID_get_idp_connections` after creation and confirm the 
    → Returns accessKeyId + accessKeySecret — SAVE SECRET NOW, shown only once
 ```
 
+A key created for an account admin (a master-realm user of your account) carries that admin's `realm_manage` role, so it works for the admin API and for MCP. A key for an ordinary realm user carries no admin role. A revoked key stops working at once.
+
+### Configure SMS
+
+Twilio is the only provider. A realm has one SMS configuration; saving again replaces it.
+
+```
+Tool: apptorID_save_sms_config
+  realmId: "{realmId}"
+  provider: "twilio"
+  accountSid: "{Twilio account SID}"
+  authToken: "{Twilio auth token}"
+  fromNumber: "+15551234567"
+```
+
+`apptorID_update_sms_config (smsConfigId, ...)` changes only the fields you send.
+
 ---
 
 ## MCP Tool Quick Reference
@@ -271,13 +288,13 @@ All tool names are prefixed with `apptorID_`:
 | **Setup** | `full_setup` |
 | **Realms** | `list_realms`, `create_realm`, `get_realm`, `update_realm`, `delete_realm`, `configure_password_policy` |
 
-> **Teardown order:** `delete_realm` fails while the realm still has users or app clients. `delete_user` fails with "User should be disabled" unless the user is disabled first, and there is NO MCP disable tool: disable over HTTP (`PUT /realms/{realmId}/users/{userName}/disable`, admin token), then `delete_user`, then `delete_app_client`, delete any realm email templates over HTTP (`DELETE /email-templates/{id}`; IDs from `get_email_templates` per `emailType`), then `delete_realm`.
+> **Teardown:** `delete_realm` removes the realm together with its users, app clients, tokens, consents, email/SMS configuration and signing keys, and `delete_account` does the same for every realm of the account plus its admin users (it needs a `master_realm_manage` key). The master realm and the master account are refused. To delete one user: `disable_user`, then `delete_user` (an active user is refused with "User should be disabled").
 | **App Clients** | `list_app_clients`, `create_app_client`, `get_app_client`, `update_app_client`, `delete_app_client`, `reset_client_secret` |
 | **App URLs** | `list_app_urls`, `add_app_urls`, `delete_app_url` |
 | **IdPs** | `list_identity_providers`, `add_idp_connection`, `get_idp_connections`, `remove_idp_connection` |
 | **Email** | `save_email_config`, `update_email_config`, `get_email_config`, `delete_email_config`, `test_email`, `save_email_template`, `get_email_templates` |
 | **SMS** | `save_sms_config`, `update_sms_config`, `get_sms_config` |
-| **Users** | `create_user`, `list_users`, `get_user`, `update_user`, `delete_user`, `set_password`, `forgot_password` |
+| **Users** | `create_user`, `list_users`, `get_user`, `update_user`, `disable_user`, `enable_user`, `delete_user`, `set_password`, `forgot_password` |
 | **Roles** | `create_role`, `list_roles`, `update_role`, `assign_role_to_user`, `remove_role_from_user` |
 | **Permissions** | `create_permission`, `list_permissions` |
 | **Resource Servers** | `create_resource_server`, `list_resource_servers`, `update_resource_server`, `delete_resource_server`, `add_scopes`, `get_scopes` |
@@ -307,7 +324,12 @@ All tool names are prefixed with `apptorID_`:
 - **Hosted login URL:** Always register a `login` URL (for hosted login, `https://{authDomain}/hosted-login/`). Without one, a plain `/oidc/auth` fails with `no_login_url_registered`; only `provider_id=local` requests and email links fall back to the hosted SPA.
 - **Hosted login includes Forgot password and Reset password pages.** Register a `reset_password` URL only if the app builds its own reset page.
 - **Default SMTP:** Works without email config. Fallback: realm → account → master.
-- **MCP `create_user`:** with password → `active`; without → `force_change_password`. Neither sends an email. The HTTP API (`POST /realms/{realmId}/users`) sends a welcome email for every local user unless `appHandlesNotification=true`.
+- **MCP `create_user`:** with password → `active`; without → `force_change_password`. Neither sends an email. The password must meet the realm's password policy, and `phone` and `phonePrefix` go together.
+- **MCP `set_password`:** only for an existing, active, local user; an unknown user or a Google/Microsoft-only user is refused.
+- **MCP `save_email_config`:** a realm has one email configuration; saving again replaces it.
+- **MCP `create_account` and `delete_account`** need a key with `master_realm_manage`.
+- **Audit:** every MCP tool that changes something is written to the activity log with the access key and its user; secrets are masked.
+- The HTTP API (`POST /realms/{realmId}/users`) sends a welcome email for every local user unless `appHandlesNotification=true`.
 - **clientSecret shown only once** at app client creation. Save it immediately.
 - **accessKeySecret shown only once** at access key creation. Save it immediately.
 - MCP not available → tell user to use apptorID Admin UI.
