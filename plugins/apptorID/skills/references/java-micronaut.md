@@ -22,7 +22,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'io.apptor.authserver:apptor-authserver-sdk-java:0.98'
+    implementation 'io.apptor.authserver:apptor-authserver-sdk-java:0.99'
 }
 ```
 
@@ -65,7 +65,7 @@ Both clients take the **full base URL including `https://`** (e.g. `https://acme
 - **Do not use `revokeToken`**: in every SDK version up to 0.99 it posts to `/oidc/token` instead of `/oidc/revoke`, so it revokes nothing. Revoke over HTTP: `POST {realmUrl}/oidc/revoke` with `refresh_token` and `token_type_hint=refresh_token`.
 - `retrieveBearerTokensFromPassword(...)`, `retrieveBearerTokensFromOtp(...)`
 - `retrieveCustomBearerTokensFromPassword(user, password, claims)` (all versions)
-- **From 0.99** (use it once it is in the repository above; until then call the endpoints over HTTP): `startMagicLink(email, redirectUri, scope, state, nonce, codeChallenge, codeChallengeMethod)`, `verifyMagicLinkCode(transactionId, code)` (a wrong code throws `UnauthorizedException`), `retrieveCustomBearerTokensFromAuthorizationCode(code, claims)` and `(code, codeVerifier, claims)`, `retrieveCustomBearerTokensFromRefreshToken(refreshToken, claims)`, `retrieveBearerTokensFromAuthorizationCode(code, codeVerifier)`; `AuthServerAdminClient.createMagicLink(appClientId, userName, request, appHandlesNotification)`
+- **From 0.99** (these need a server with magic link and stored custom claims: sandbox has it; check production before relying on them): `startMagicLink(email, redirectUri, scope, state, nonce, codeChallenge, codeChallengeMethod)`, `verifyMagicLinkCode(transactionId, code)` (a wrong code throws `UnauthorizedException`), `retrieveCustomBearerTokensFromAuthorizationCode(code, claims)` and `(code, codeVerifier, claims)`, `retrieveCustomBearerTokensFromRefreshToken(refreshToken, claims)`, `retrieveBearerTokensFromAuthorizationCode(code, codeVerifier)`; `AuthServerAdminClient.createMagicLink(appClientId, userName, request, appHandlesNotification)`
 - Older SDK versions keep working against the current server; a refresh must use the same app client that obtained the token.
 
 `AuthServerAdminClient(authDomain, accessKeyId, accessKeySecret)` — admin operations with an access key:
