@@ -138,13 +138,15 @@ Tool: apptorID_save_email_template
 | `welcome_email` | `{{password_reset_url}}`, `{{user_name}}` | Welcome/set-password link |
 | `reset_password` | `{{password_reset_url}}`, `{{user_name}}`, `{{link_expiry}}` | Password reset link |
 | `password_changed` | _(none)_ | Confirmation email |
-| `magic_link` | _(none enforced — include `{{link}}` or the email is useless)_ | Magic link URL |
+| `magic_link` | _(none enforced on save — a body without `{{link}}` is ignored at send time and the built-in email goes out)_ | Sign-in link and 6-digit code |
 
 **Available variables per email type:**
 
 For `welcome_email` and `reset_password`: `{{password_reset_url}}`, `{{link_expiry}}`, `{{user_name}}`, `{{login_url}}`
 
-For `magic_link`: `{{link}}`, `{{expiry}}`, `{{user_name}}`
+For `magic_link`: `{{link}}`, `{{code}}`, `{{expiry}}` (minutes), `{{user_name}}`. Include both `{{link}}` and `{{code}}`.
+
+Magic link sign-in itself is off by default and has no MCP tool: switch it on in the admin UI (Branding → Content → **Email sign-in link**) or with `PUT /realms/{realmId}/branding` / `PUT /app-clients/{clientId}/branding` (`magicLinkEnabled: true`).
 
 Unknown variables are not checked; they stay as literal text in the email.
 
