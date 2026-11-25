@@ -446,7 +446,7 @@ DELETE /realms/{realmId}/users/{userName}
 Authorization: Bearer {admin-token}
 ```
 
-**Delete requires a disabled user** ("User should be disabled" otherwise): disable first, then delete. A realm cannot be deleted while it still has users or app clients (foreign keys).
+**Delete requires a disabled user** ("User should be disabled" otherwise): disable first, then delete. `DELETE /realms/{realmId}` removes the realm together with its users, app clients, tokens and configuration; the master realm is refused (403), an unknown realm is 404.
 
 **Note:** User operations use `{userName}` in the path (typically the email), NOT a UUID.
 
